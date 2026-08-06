@@ -1,0 +1,13 @@
+node_modules/
+npm-debug.log*
+.DS_Store
+dist/
+out/
+
+# 凭证/本地配置，切勿入库
+.env
+config.local.json
+
+# 个人文章与截图素材，不随仓库分发
+docs/wechat-article/
+
