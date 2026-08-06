@@ -36,7 +36,7 @@
 环境要求：**Linux + X11 图形会话**（开发环境为 Linux；Windows/macOS 未适配）、**Node.js 18+**。
 
 ```bash
-git clone https://github.com/<你的用户名>/ai-roundtable.git
+git clone https://github.com/sundanan/ai-roundtable.git
 cd ai-roundtable
 bash install.sh      # 检查环境 → npm install → 生成 .env 模板
 ```
