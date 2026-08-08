@@ -56,13 +56,37 @@ function createFeishuBridge({ onQuestion, onState }) {
     });
   }
 
+  // 发送文件消息（总结 docx 用）：先上传拿 file_key，再发 file 消息。
+  // 需要应用具备 im:resource 与发消息权限；失败由调用方回退纯文本
+  async function sendFile(chatId, filePath) {
+    const fs = require('fs');
+    const path = require('path');
+    const up = await client.im.file.create({
+      data: {
+        file_type: 'doc',
+        file_name: path.basename(filePath),
+        file: fs.createReadStream(filePath),
+      },
+    });
+    const fileKey = (up && up.file_key) || (up && up.data && up.data.file_key);
+    if (!fileKey) throw new Error('文件上传未返回 file_key');
+    await client.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: chatId,
+        msg_type: 'file',
+        content: JSON.stringify({ file_key: fileKey }),
+      },
+    });
+  }
+
   function stop() {
     try {
       wsClient.close({ force: true });
     } catch {}
   }
 
-  return { start, sendText, stop };
+  return { start, sendText, sendFile, stop };
 }
 
 module.exports = { createFeishuBridge };

@@ -112,6 +112,9 @@ const ADAPTERS = [
     // 默认 8 轮陈旧检测会误杀（2026-08 曾把已答完的研究判成失败）
     watchStop: true,
     staleMax: 40,
+    // reloadOnSendFail：Kimi 会话偶发损坏——内容已填进输入框但提交报错，
+    // 手动刷新+重贴可恢复；发送失败时自动刷新页面重发一次（2026-08 超时根因）
+    reloadOnSendFail: true,
     // 思考/工具调用块不是答案：抓取时整体排除（2026-08 曾把思考前奏当回复）
     pruneSelectors: ['.thinking-container', '[class*="toolcall-container"]'],
     inputSelectors: [
@@ -178,6 +181,9 @@ const ADAPTERS = [
     id: 'wenxin',
     name: '文心',
     url: 'https://wenxin.baidu.com/',
+    // staleMax 放宽：文心回复明显偏慢，连续两轮被默认 8 轮（约 24s）陈旧检测
+    // 误判"未取到本轮回复"，实际稍后即交卷（2026-08 实测）
+    staleMax: 20,
     inputSelectors: [
       'textarea[class*="input"]',
       'textarea',

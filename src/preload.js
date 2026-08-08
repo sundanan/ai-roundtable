@@ -19,4 +19,7 @@ contextBridge.exposeInMainWorld('roundtable', {
   // ===== 历史记录（改进1，桌面端同步）=====
   saveHistory: (entry) => ipcRenderer.send('save-history', entry),
   getHistory: (q, limit) => ipcRenderer.invoke('get-history', q, limit),
+
+  // ===== 总结导出 =====
+  saveMarkdown: (name, content) => ipcRenderer.invoke('save-markdown', name, content),
 });

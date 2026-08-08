@@ -1,5 +1,7 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, screen, webContents } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, screen, webContents, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
 // 先加载 .env（FEISHU_APP_ID / FEISHU_APP_SECRET），再引入飞书桥接
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const { createFeishuBridge } = require('./feishu');
@@ -66,16 +68,14 @@ let mainWindow = null;
 // requestId -> { source:'feishu'|'http', chatId?, httpRes?, question }，结果回来时按来源路由
 const pendingRounds = new Map();
 
-// 纯文本格式化：总结 + 8 家回复（单家截断到 1200 字）——飞书用
+// 纯文本格式化：总结（内含附录各家原文，由 renderer 拼接）——飞书用
 function formatResultText(data) {
   if (data.error === 'busy') return data.message || '正在处理上一条，请稍候';
   if (data.error) return `出错了：${data.message || data.error}`;
+  if (data.summary) return data.summary;
+  // 总结失败时才退化为逐家摘录（单家截断到 1200 字），避免与附录重复
   let out = '';
-  if (data.summary) {
-    out += `【总结】\n${data.summary}\n`;
-  } else if (data.summaryError) {
-    out += `【总结失败】${data.summaryError}\n`;
-  }
+  if (data.summaryError) out += `【总结失败】${data.summaryError}\n`;
   out += '\n【各家回复】';
   for (const r of data.replies) {
     const tag = r.state === 'done' ? '' : `（${r.state}）`;
@@ -92,6 +92,41 @@ function startRound(requestId, question, sites) {
     return true;
   }
   return false;
+}
+
+// 总结落成 docx（pandoc 转换），飞书/微信渠道以文件形式发送；失败返回 null 由调用方回退纯文本
+function buildSummaryDocx(question, summary) {
+  return new Promise((resolve) => {
+    try {
+      const dir = path.join(app.getPath('userData'), 'summaries');
+      fs.mkdirSync(dir, { recursive: true });
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp =
+        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+      const docxPath = path.join(dir, `圆桌总结-${stamp}.docx`);
+      const mdPath = path.join(dir, `圆桌总结-${stamp}.md`);
+      const doc =
+        `# ${question || 'AI 圆桌总结'}\n\n` +
+        `> 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}\n\n` +
+        `${summary}\n`;
+      fs.writeFileSync(mdPath, doc, 'utf8');
+      // hard_line_breaks：总结是纯文本单换行，不加此参数 pandoc 会把单换行折叠成空格，
+      // Word 里标题和条目全部粘成一行（2026-08 实测首份生产 docx 即此问题）
+      execFile('pandoc', ['-f', 'markdown+hard_line_breaks', mdPath, '-o', docxPath], { timeout: 30000 }, (err) => {
+        // 中间产物 md 无论成败都清掉
+        try { fs.unlinkSync(mdPath); } catch {}
+        if (err) {
+          console.error('[docx] pandoc 转换失败:', err.message);
+          return resolve(null);
+        }
+        resolve(docxPath);
+      });
+    } catch (e) {
+      console.error('[docx] 生成失败:', e && e.message);
+      resolve(null);
+    }
+  });
 }
 
 // 飞书桥接为可选：未配置 FEISHU_APP_ID/SECRET 时跳过，桌面端与本地 HTTP 入口照常可用
@@ -201,8 +236,8 @@ const httpServer = http.createServer(async (req, res) => {
   }
 });
 
-// renderer 回报最终结果 → 按来源路由（飞书文本 or HTTP JSON）
-ipcMain.on('service:result', (_event, data) => {
+// renderer 回报最终结果 → 按来源路由（飞书：摘要文本 + docx 附件；HTTP：JSON 带 summaryFile）
+ipcMain.on('service:result', async (_event, data) => {
   const pending = pendingRounds.get(data.requestId);
   if (!pending) return;
   pendingRounds.delete(data.requestId);
@@ -220,6 +255,12 @@ ipcMain.on('service:result', (_event, data) => {
     });
   }
 
+  // 有总结时落成 docx：附录含各家原文，正文可能数万字，文件形式体验远好于长文本
+  let docxPath = null;
+  if (!data.error && data.summary) {
+    docxPath = await buildSummaryDocx(pending.question, data.summary);
+  }
+
   if (pending.source === 'http') {
     try {
       jsonResponse(pending.httpRes, 200, {
@@ -228,6 +269,8 @@ ipcMain.on('service:result', (_event, data) => {
         summary: data.summary || '',
         summaryError: data.summaryError || '',
         replies: data.replies || [],
+        // 微信（Hermes skill）等渠道：有此字段时把该 docx 作为附件发给用户
+        summaryFile: docxPath || '',
       });
     } catch (e) {
       console.error('[http] 回写失败:', e && e.message);
@@ -236,6 +279,19 @@ ipcMain.on('service:result', (_event, data) => {
   }
 
   if (!bridge) return;
+  if (docxPath) {
+    const doneCount = (data.replies || []).filter((r) => r.state === 'done').length;
+    try {
+      await bridge.sendText(
+        pending.chatId,
+        `圆桌完成：${pending.question}\n${doneCount}/${(data.replies || []).length} 家成功，总结（五段结构 + 各家原文附录）见附件 docx。`
+      );
+      await bridge.sendFile(pending.chatId, docxPath);
+      return;
+    } catch (e) {
+      console.error('[feishu] docx 发送失败，回退纯文本:', e && e.message);
+    }
+  }
   bridge.sendText(pending.chatId, formatResultText(data)).catch((e) => {
     console.error('[feishu] 发送结果失败:', e && e.message);
   });
@@ -253,6 +309,19 @@ ipcMain.on('save-history', (_event, entry) => {
 });
 // 桌面端历史弹窗查询
 ipcMain.handle('get-history', (_event, q, limit) => history.query(q || '', limit || 20));
+
+// 总结导出为 Markdown：系统保存对话框，默认落到文档目录
+ipcMain.handle('save-markdown', async (_event, defaultName, content) => {
+  if (!mainWindow) return { ok: false, error: 'no-window' };
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: '保存总结为 Markdown',
+    defaultPath: path.join(app.getPath('documents'), defaultName || '圆桌总结.md'),
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  fs.writeFileSync(filePath, content, 'utf8');
+  return { ok: true, filePath };
+});
 
 async function createWindow() {
   // 直接使用工作区（不含任务栏的区域）作为窗口边界，避免底部被任务栏遮挡
@@ -340,7 +409,7 @@ ipcMain.handle('click-at', (event, webContentsId, x, y) => {
 ipcMain.handle('call-llm', async (event, { baseURL, apiKey, model, messages }) => {
   const url = baseURL.replace(/\/+$/, '') + '/chat/completions';
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 90000); // 服务商繁忙时避免无限挂起
+  const timer = setTimeout(() => ac.abort(), 180000); // 带 8 家全文的总结提示词较长，放宽到 180s
   let res;
   try {
     res = await fetch(url, {
@@ -353,7 +422,7 @@ ipcMain.handle('call-llm', async (event, { baseURL, apiKey, model, messages }) =
       signal: ac.signal,
     });
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('调用超时（90 秒无响应，服务商可能繁忙，请稍后重试）');
+    if (e.name === 'AbortError') throw new Error('调用超时（180 秒无响应，服务商可能繁忙，请稍后重试）');
     throw e;
   } finally {
     clearTimeout(timer);

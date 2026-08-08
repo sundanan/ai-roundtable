@@ -27,13 +27,13 @@
 
 ## 三种入口
 
-1. **桌面 GUI**：输入框 + 8 家状态灯 + 总结面板，点模型按钮可全屏手动登录/补发；
-2. **飞书机器人**（可选）：私聊机器人发一句话即触发，回复"总结 + 各家要点"；
-3. **本地 HTTP 接口**：供 agent/脚本集成（见下方接口说明与 `integrations/hermes-skill/` 内的现成 skill）。
+1. **桌面 GUI**：输入框 + 8 家状态灯 + 总结面板（五段结构 + 目录跳转/scroll-spy），单击模型按钮切换选中，双击全屏手动登录/补发，行尾 ↻ 单家补发；设置里可开「全部交卷后自动总结」；
+2. **飞书机器人**（可选）：私聊机器人发一句话即触发，回复"摘要 + 总结 docx 附件"；
+3. **本地 HTTP 接口**：供 agent/脚本集成（见下方接口说明与 `integrations/hermes-skill/` 内的现成 skill），返回 `summaryFile`（总结 docx 路径）供微信等渠道按附件发送。
 
 ## 安装
 
-环境要求：**Linux + X11 图形会话**（开发环境为 Linux；Windows/macOS 未适配）、**Node.js 18+**。
+环境要求：**Linux + X11 图形会话**（开发环境为 Linux；Windows/macOS 未适配）、**Node.js 18+**；飞书/HTTP 渠道的总结 docx 附件依赖 **pandoc**（未安装时自动回退纯文本，不影响其他功能）。
 
 ```bash
 git clone https://github.com/sundanan/ai-roundtable.git
@@ -45,7 +45,7 @@ Electron 需要显示环境（窗口与 webview 必须真实渲染），无头�
 
 ## 配置
 
-1. **登录各家账号**：`npm start` 启动后，点第二排每个模型按钮进入全屏，手动登录一次；
+1. **登录各家账号**：`npm start` 启动后，双击第二排每个模型按钮进入全屏，手动登录一次；
 2. **配置总结模型**：点「设置」，填任意 OpenAI 兼容 API 的 Base URL / API Key / 模型名（如 `https://api.deepseek.com/v1` + `deepseek-chat`）。配置只存本机 localStorage；
 3. **飞书入口（可选）**：在 [飞书开放平台](https://open.feishu.cn) 创建企业自建应用，开通机器人能力，事件订阅选「长连接」模式并订阅 `im.message.receive_v1`，然后把 App ID/Secret 填入 `.env`（参照 `.env.example`）。不配置飞书不影响桌面端与 HTTP 接口。
 
@@ -64,7 +64,7 @@ bash service.sh      # 常驻服务（日志写入 ~/ai-roundtable-service.log�
 | 方法 路径 | 说明 |
 |---|---|
 | `GET /health` | `{ok, ready}` 探活 |
-| `POST /ask` | body `{question, sites?}`；跑一轮返回 `{ok, question, summary, summaryError, replies[]}`；`sites` 为可选子集（id 数组），同一时间只跑一轮，并发返回 busy。耗时约 1–7 分钟，请给足超时 |
+| `POST /ask` | body `{question, sites?}`；跑一轮返回 `{ok, question, summary, summaryError, summaryFile, replies[]}`；`sites` 为可选子集（id 数组），同一时间只跑一轮，并发返回 busy；`summaryFile` 为总结 docx 的本机绝对路径（生成失败为空）。耗时约 1–7 分钟，请给足超时 |
 | `GET /history?limit=N&q=关键词` | 历史列表 `{items:[{id,ts,question,summary,count}]}` |
 | `GET /history/item?id=xxx` | 单轮完整内容 `{item:{summary, replies[]}}` |
 

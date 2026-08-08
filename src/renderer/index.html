@@ -8,21 +8,21 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 第一层：输入框 + 右侧四宫格按钮（发送/设置，总结/历史） -->
+  <!-- 第一层：输入框 + 右侧按钮组（发送占两行高；总结横跨；设置/历史两小格） -->
   <header class="topbar">
     <div class="composer">
       <textarea id="prompt" rows="3"
         placeholder="输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）"></textarea>
       <div class="composer-actions">
         <button id="send-btn" title="发送到勾选各家（Ctrl+Enter）">发送</button>
-        <button id="settings-btn" title="总结模型设置">设置</button>
         <button id="summarize-btn" class="primary" title="提交 LLM 总结" disabled>总结</button>
+        <button id="settings-btn" title="总结模型设置">设置</button>
         <button id="history-btn" title="历史记录">历史</button>
       </div>
     </div>
   </header>
 
-  <!-- 第二层：已选计数 + 各家按钮（点文字切换选中，点空白全屏打开） -->
+  <!-- 第二层：已选计数 + 各家按钮（单击切换选中，双击全屏打开） -->
   <nav id="model-bar">
     <div class="subset-ctrl">
       <span id="subset-count" class="subset-count">已选 8/8</span>
@@ -42,9 +42,18 @@
       <div id="summary-panel">
         <div class="summary-head">
           <span>📋 总结</span>
+          <span class="summary-actions">
+            <button id="summary-copy" class="mini" title="复制总结全文">复制</button>
+            <button id="summary-save" class="mini" title="保存总结为 Markdown 文件">存为 MD</button>
+            <button id="summary-top" class="mini" title="回到顶部">↑ 顶部</button>
+          </span>
           <span id="summary-status" class="card-state"></span>
         </div>
-        <div id="summary-body" class="summary-body placeholder">各家回答完毕后，点击「总结」。</div>
+        <!-- 目录标签：总结生成后由 JS 填充，纵向排列在内容左侧（五部分 + 附录各家，点击平滑跳转） -->
+        <div class="summary-main">
+          <div id="summary-toc" class="summary-toc" hidden></div>
+          <div id="summary-body" class="summary-body md placeholder">各家回答完毕后，点击「总结」。</div>
+        </div>
       </div>
     </div>
   </main>
@@ -55,6 +64,7 @@
   <!-- 设置弹窗 -->
   <div id="settings-modal" class="modal-mask" hidden>
     <div class="modal">
+      <button class="modal-close" id="settings-close" title="关闭">✕</button>
       <h2>总结模型设置（OpenAI 兼容 API）</h2>
       <label>Base URL
         <input id="cfg-baseurl" type="text" placeholder="https://api.deepseek.com/v1">
@@ -64,6 +74,9 @@
       </label>
       <label>模型名
         <input id="cfg-model" type="text" placeholder="deepseek-chat">
+      </label>
+      <label class="cfg-check">
+        <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结（桌面端）
       </label>
       <p class="modal-tip">配置仅保存在本机（localStorage），不会发送到任何网页。</p>
       <div class="modal-actions">
@@ -76,6 +89,7 @@
   <!-- 历史记录弹窗 -->
   <div id="history-modal" class="modal-mask" hidden>
     <div class="modal modal-wide">
+      <button class="modal-close" id="history-close-x" title="关闭">✕</button>
       <h2>历史记录</h2>
       <div class="history-toolbar">
         <input id="history-search" type="text" placeholder="按问题关键词过滤…">
