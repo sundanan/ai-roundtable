@@ -14,6 +14,17 @@ function createFeishuBridge({ onQuestion, onState }) {
   }
 
   const client = new Client({ appId, appSecret, loggerLevel: LoggerLevel.warn });
+
+  // 会话白名单：逗号分隔 chat_id，配置后仅名单内的会话可触发圆桌；
+  // 留空 = 不限制（保持旧行为）。防陌生人/无关群消耗各家账号额度。
+  const allowChatIds = (process.env.FEISHU_ALLOW_CHAT_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // 机器人自身 open_id（群消息 @ 判定用）；bot.info 失败时置 null，退化为"任意 @"都响应
+  let botOpenId = null;
+
   const wsClient = new WSClient({
     appId,
     appSecret,
@@ -26,6 +37,10 @@ function createFeishuBridge({ onQuestion, onState }) {
   });
 
   async function start() {
+    try {
+      const info = await client.bot.info();
+      botOpenId = (info && info.bot && info.bot.open_id) || null;
+    } catch {}
     await wsClient.start({
       eventDispatcher: new EventDispatcher({ loggerLevel: LoggerLevel.warn }).register({
         'im.message.receive_v1': async (data) => {
@@ -39,6 +54,18 @@ function createFeishuBridge({ onQuestion, onState }) {
           }
           text = text.trim();
           if (!text) return;
+          if (allowChatIds.length && !allowChatIds.includes(msg.chat_id)) return;
+          // 群聊：仅响应 @机器人 的消息。机器人一旦被拉群，群里每条文本都会
+          // 触发整轮 8 家广播；拿不到 botOpenId 时退化为任意 @ 都响应。
+          if (msg.chat_type === 'group') {
+            const mentions = msg.mentions || [];
+            const atBot = mentions.some(
+              (m) => m && m.id && (!botOpenId || m.id.open_id === botOpenId)
+            );
+            if (!atBot) return;
+            text = text.replace(/@_user_\d+/g, '').trim(); // 去掉 @占位符
+            if (!text) return;
+          }
           onQuestion({ requestId: msg.message_id, question: text, chatId: msg.chat_id });
         },
       }),
