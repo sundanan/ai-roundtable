@@ -70,6 +70,25 @@ body {
 }
 #prompt:focus { border-color: var(--accent); }
 
+/* 「＋」新问题按钮：输入框左侧的无边框竖条，与输入框等高、整条均为有效点击区，点击清空输入框 */
+#new-btn {
+  align-self: stretch;        /* 与输入框等高，整条竖带都可点 */
+  flex: 0 0 auto;
+  width: 17px;                /* 约为此前 34px 的一半，输入框随之整体左移 */
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;               /* 去掉外框 */
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+#new-btn:hover { color: var(--accent); background: rgba(79, 124, 255, 0.08); }
+#new-btn:focus { outline: none; }
+
 /* 发送/总结/设置/历史：发送占左侧两行高（主行动），总结横跨右上，设置/历史右下两小格 */
 .composer-actions {
   display: grid;
@@ -383,6 +402,10 @@ button.icon-text-btn { padding: 9px 14px; }
 
 .summary-head .card-state { flex: 1; text-align: right; font-weight: 400; }
 
+/* 「📋 总结」标题可点击：全屏展开 DeepSeek 总结账号页面（手动登录第二账号入口） */
+#summary-title { cursor: pointer; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
+#summary-title:hover { background: rgba(154, 163, 184, 0.16); }
+
 .card-state.ok { color: var(--ok); }
 .card-state.warn { color: var(--warn); }
 .card-state.err { color: var(--err); }
@@ -436,6 +459,19 @@ button.icon-text-btn { padding: 9px 14px; }
 .toc-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(79, 124, 255, 0.12); }
 .toc-chip .toc-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .toc-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+/* 「各家意见」可展开分组：一级标签 + 缩进的 8 家二级标签 */
+.toc-group { display: flex; flex-direction: column; }
+.toc-caret { font-size: 10px; width: 10px; flex: 0 0 auto; color: var(--text-dim); }
+.toc-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 2px 9px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
+}
+.toc-sub[hidden] { display: none; }
+.toc-subchip { padding: 2px 8px; }
 /* 跳转锚点留出顶部间距，避免贴边 */
 .summary-body > * { scroll-margin-top: 10px; }
 
@@ -475,6 +511,39 @@ button.icon-text-btn { padding: 9px 14px; }
   text-align: left;
 }
 .md th { background: var(--bg); }
+
+/* 总结正文中文结构层级排版：一、(lv1) / （一）(lv2) / 附录 / 【家名】(family) */
+.md .lv1 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 20px 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--accent);
+}
+.md .lv1:first-child { margin-top: 0; }
+.md .lv2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 12px 0 5px 13px;
+}
+.md .appendix {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 24px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.md .family {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-hover);
+  margin: 16px 0 4px 8px;
+}
+/* 三级条目（1. 2.）相对二级标题缩进，层级更清晰 */
+.md ol { margin-left: 16px; }
 
 /* ---------- webview dock 与全屏浮层 ---------- */
 /* dock 铺满窗口但压在内容层下面：屏外(-20000px)会导致可信输入事件被裁剪丢弃 */
@@ -678,3 +747,17 @@ button.icon-text-btn { padding: 9px 14px; }
 .hd-reply { margin: 10px 0; padding-left: 10px; border-left: 3px solid var(--border); }
 .hd-reply-name { font-weight: 600; color: var(--accent-hover); margin-bottom: 3px; }
 .hd-reply-text { white-space: pre-wrap; word-break: break-word; color: var(--text); line-height: 1.55; }
+
+/* ---------- 设置弹窗：总结方式切换 ---------- */
+/* radio/checkbox 与文字同行、保持原生尺寸（覆盖 .modal input 的块级全宽样式） */
+.cfg-check input[type="radio"],
+.cfg-check input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin: 0 6px 0 0;
+  vertical-align: -1px;
+}
+.cfg-mode { margin-bottom: 4px; }
+#cfg-api-fields { transition: opacity 0.15s; }
+/* 选中网页总结时 API 配置区置灰（保留为备选，不隐藏） */
+#cfg-api-fields.cfg-api-off { opacity: 0.45; }

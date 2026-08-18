@@ -14,7 +14,7 @@ const subsetCountEl = document.getElementById('subset-count');
 
 // ================= webview 面板（dock 隐藏层 + 全屏浮层） =================
 function focusPanel(id) {
-  const p = panels.get(id);
+  const p = panels.get(id) || (id === SUMMARIZER.id ? summarizerPanel : null);
   if (!p) return;
   p.panelEl.classList.add('focused');
   dock.classList.add('active');
@@ -144,6 +144,47 @@ for (const adapter of ADAPTERS) {
 
   panels.set(adapter.id, entry);
 }
+
+// ================= 总结者面板（DeepSeek 第二账号；仅驻留 dock，不参与广播）=================
+// 独立分区 persist:deepseek-sum：与参与回答的 deepseek 面板同时登录不同账号，会话完全隔离。
+// 点「总结」走网页总结时被全屏展开（focusPanel），首次使用需用户手动登录第二账号。
+const summarizerPanel = (() => {
+  const panelEl = document.createElement('div');
+  panelEl.className = 'webview-panel';
+  panelEl.innerHTML = `
+    <div class="panel-header">
+      <span class="dot"></span>
+      <span class="panel-name">${SUMMARIZER.name}</span>
+      <span class="panel-status">首次使用：请在此手动登录第二个 DeepSeek 账号</span>
+      <button class="mini reload" title="刷新该面板">⟳</button>
+      <button class="mini close-focus">✕ 关闭（Esc）</button>
+    </div>
+  `;
+  const webview = document.createElement('webview');
+  webview.setAttribute('src', SUMMARIZER.url);
+  webview.setAttribute('partition', `persist:${SUMMARIZER.id}`);
+  webview.setAttribute('allowpopups', '');
+  panelEl.appendChild(webview);
+  dock.appendChild(panelEl);
+
+  const entry = {
+    adapter: SUMMARIZER,
+    panelEl,
+    webview,
+    dot: panelEl.querySelector('.dot'),
+    statusEl: panelEl.querySelector('.panel-status'),
+  };
+  panelEl.querySelector('.reload').addEventListener('click', () => webview.reload());
+  panelEl.querySelector('.close-focus').addEventListener('click', unfocusPanel);
+  webview.addEventListener('did-start-loading', () => (entry.dot.className = 'dot loading'));
+  webview.addEventListener('did-finish-load', () => (entry.dot.className = 'dot ready'));
+  webview.addEventListener('dom-ready', () => (entry.dot.className = 'dot ready'));
+  webview.addEventListener('did-fail-load', (e) => {
+    entry.dot.className = 'dot error';
+    setStatus(entry.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+  });
+  return entry;
+})();
 
 const DOT_LABELS = {
   '': '未加载',
@@ -474,7 +515,24 @@ function buildScrapeScript(adapter, question) {
             tbls[tb].replaceWith(pre);
           }
         } catch (e) {}
-        var text = clone.innerText.trim();
+        // innerText 依赖渲染布局：DeepSeek 等用块级 div/p 排版（无 <br>），换行完全来自布局；
+        // 克隆节点脱离 DOM 后无布局，innerText 会丢失全部块级换行（2026-08-18 实测：
+        // 活节点 27 换行 / 脱离克隆 0 换行 / 重新挂回 27 换行）。故把修剪好的克隆临时挂到
+        // 屏外（保留布局但不可见）再取 innerText，取完立即移除，不改动真实页面。
+        // 隐藏方式必须用 opacity:0 而非 visibility:hidden：Chromium 150（Electron 43）起
+        // visibility:hidden 子树按"未渲染"处理，innerText 直接返回空串（2026-08-18 实测：
+        // 活节点 602 字/34 行，visibility:hidden 克隆 0 字，opacity:0 克隆 602 字/34 行，
+        // 曾致所有站点抓取 ok:false、轮次全部 420s 超时）。
+        var text = '';
+        var holder = document.createElement('div');
+        holder.style.cssText = 'position:absolute;left:-99999px;top:0;opacity:0;';
+        holder.appendChild(clone);
+        document.body.appendChild(holder);
+        try {
+          text = clone.innerText.trim();
+        } finally {
+          holder.remove();
+        }
         if (text.length < 2) continue; // 剪完没有答案内容 → 换下一个选择器/继续等待
         if (text.length < 300 && PENDING.test(text)) return { ok: true, pending: true, text: '' };
         if (text.length < 200 && stopVisible()) return { ok: true, pending: true, text: '' };
@@ -724,15 +782,19 @@ async function resendPanel(id) {
 function submit() {
   const text = promptEl.value.trim();
   if (!text) return;
-  promptEl.value = '';
-  autoGrow();
-  // 只发选中的子集；全未选中则视为全发
+  // 发送后保留输入文本（便于对照/改问再发）；清空请用「新问题」按钮
   const selected = [...modelGrid.querySelectorAll('.model-btn.checked .model-name')]
     .map((t) => t.dataset.id);
   broadcast(text, selected.length ? selected : undefined);
 }
 
 sendBtn.addEventListener('click', submit);
+// 新问题：清空输入框（发送不再自动清空），焦点回到输入框
+document.getElementById('new-btn').addEventListener('click', () => {
+  promptEl.value = '';
+  autoGrow();
+  promptEl.focus();
+});
 // Enter 换行，Ctrl+Enter 发送
 promptEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
@@ -886,7 +948,7 @@ function updateProgress() {
   }
   summarizeBtn.disabled = counts.done === 0;
   summarizeBtn.textContent = '总结';
-  summarizeBtn.title = counts.done ? `提交 LLM 总结（${counts.done} 家已完成）` : '提交 LLM 总结';
+  summarizeBtn.title = counts.done ? `生成总结（${counts.done} 家已完成）` : '生成总结';
 
   // 优化3：进度条（done + error 视为已到终态）
   const settled = counts.done + counts.error;
@@ -956,18 +1018,22 @@ function buildSummaryToc() {
   summaryToc.hidden = true;
   summaryAnchors.clear();
   tocAnchors = [];
-  const sections = [];
-  const families = [];
+  const sectionEls = new Map(); // label -> el（一、~五、）
+  const families = []; // [{ label, el }]（附录各家【家名】）
   const seen = new Set(); // 每家只取第一次出现（回复正文里也可能有【家名】字样）
+  let appendixEl = null; // 附录标题（供「各家意见」分组跳转）
   let inAppendix = false;
   for (const el of summaryBody.children) {
     const t = (el.textContent || '').trim();
-    if (/^附录/.test(t)) { inAppendix = true; continue; }
+    if (/^附录/.test(t)) {
+      inAppendix = true;
+      if (!appendixEl) appendixEl = el;
+      continue;
+    }
     const sm = t.match(/^([一二三四五])、/);
     if (sm) {
       const label = TOC_SECTIONS['一二三四五'.indexOf(sm[1])];
-      // 每个部分只取第一次出现：LLM 偶尔在正文里重复段标题（曾出现两个"次要共识"）
-      if (!sections.some((s) => s.label === label)) sections.push({ label, el });
+      if (!sectionEls.has(label)) sectionEls.set(label, el);
       continue;
     }
     if (inAppendix) {
@@ -978,7 +1044,9 @@ function buildSummaryToc() {
       }
     }
   }
-  if (!sections.length && !families.length) return;
+  if (!sectionEls.size && !families.length) return;
+
+  // 通用目录标签；el 为空时不绑跳转（该部分缺失）
   const mkChip = (label, el, brandId) => {
     const chip = document.createElement('button');
     chip.className = 'toc-chip';
@@ -989,27 +1057,63 @@ function buildSummaryToc() {
       chip.appendChild(dot);
     }
     chip.appendChild(document.createTextNode(label));
-    chip.addEventListener('click', () =>
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    if (el) {
+      chip.addEventListener('click', () =>
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }
     return chip;
   };
-  for (const s of sections) {
-    const chip = mkChip(s.label, s.el);
-    tocAnchors.push({ el: s.el, chip });
+
+  // 五个部分按固定顺序渲染，与正文一一对应
+  for (const label of TOC_SECTIONS) {
+    const el = sectionEls.get(label) || null;
+    const chip = mkChip(label, el);
+    if (el) tocAnchors.push({ el, chip });
     summaryToc.appendChild(chip);
   }
-  if (sections.length && families.length) {
+
+  if (families.length) {
     const sep = document.createElement('span');
     sep.className = 'toc-sep';
     summaryToc.appendChild(sep);
+
+    // 「各家意见」一级分组：点击展开/收起 8 家二级标签，并跳到附录
+    const groupWrap = document.createElement('div');
+    groupWrap.className = 'toc-group';
+    const caret = document.createElement('span');
+    caret.className = 'toc-caret';
+    caret.textContent = '▸';
+    const groupChip = document.createElement('button');
+    groupChip.className = 'toc-chip toc-group-chip';
+    groupChip.appendChild(caret);
+    groupChip.appendChild(document.createTextNode('各家意见'));
+    const subBox = document.createElement('div');
+    subBox.className = 'toc-sub';
+    subBox.hidden = true;
+    const setExpanded = (open) => {
+      subBox.hidden = !open;
+      caret.textContent = open ? '▾' : '▸';
+      groupWrap.classList.toggle('expanded', open);
+    };
+    groupChip.addEventListener('click', () => {
+      setExpanded(subBox.hidden);
+      if (appendixEl) appendixEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    for (const f of families) {
+      const ad = ADAPTERS.find((a) => a.name === f.label);
+      const chip = mkChip(f.label, f.el, ad && ad.id);
+      chip.classList.add('toc-subchip');
+      summaryAnchors.set(f.label, { el: f.el, chip });
+      tocAnchors.push({ el: f.el, chip });
+      subBox.appendChild(chip);
+    }
+
+    groupWrap.appendChild(groupChip);
+    groupWrap.appendChild(subBox);
+    summaryToc.appendChild(groupWrap);
   }
-  for (const f of families) {
-    const ad = ADAPTERS.find((a) => a.name === f.label);
-    const chip = mkChip(f.label, f.el, ad && ad.id);
-    summaryAnchors.set(f.label, { el: f.el, chip });
-    tocAnchors.push({ el: f.el, chip });
-    summaryToc.appendChild(chip);
-  }
+
   summaryToc.hidden = false;
   updateTocSpy();
 }
@@ -1060,6 +1164,21 @@ function renderMarkdown(md) {
     if ((m = line.match(/^(#{1,3})\s+(.*)/))) {
       closeList();
       html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`;
+    } else if ((m = line.match(/^([一二三四五])、\s*(.*)/))) {
+      // 中文一级标题（一、~五、）：五段结构段首
+      closeList();
+      html += `<h2 class="lv1">${inline(line)}</h2>`;
+    } else if (/^附录/.test(line.trim())) {
+      closeList();
+      html += `<h2 class="appendix">${inline(line)}</h2>`;
+    } else if ((m = line.match(/^（[一二三四五六七八九十]+）、?\s*(.*)/))) {
+      // 中文二级标题（（一）（二）…）
+      closeList();
+      html += `<h3 class="lv2">${inline(line)}</h3>`;
+    } else if (/^【.+?】/.test(line.trim())) {
+      // 【家名】：附录各家小节标题
+      closeList();
+      html += `<h3 class="family">${inline(line)}</h3>`;
     } else if ((m = line.match(/^[-*]\s+(.*)/))) {
       if (list !== 'ul') { closeList(); html += '<ul>'; list = 'ul'; }
       html += `<li>${inline(m[1])}</li>`;
@@ -1079,20 +1198,61 @@ function renderMarkdown(md) {
 
 function getSettings() {
   return {
+    // 总结方式：web=DeepSeek 第二账号网页总结（默认），api=OpenAI 兼容接口（备选）
+    summaryMode: localStorage.getItem('rt_summaryMode') === 'api' ? 'api' : 'web',
     baseURL: localStorage.getItem('rt_baseURL') || '',
     apiKey: localStorage.getItem('rt_apiKey') || '',
     model: localStorage.getItem('rt_model') || '',
   };
 }
 
+// 圆桌总结模板（五段结构）。内容要求两种模式共用；排版要求分模式，原因：
+// - API 模式：原始文本直接返回，单换行天然保留 → 用「纯文本 + 单换行」即可；
+// - 网页模式：输出要经「DeepSeek 页面渲染 → innerText 抓取」，单换行会被 Markdown
+//   渲染折叠、抓取后丢失，导致分级排版与目录锚点损坏（2026-08-18 实测确认）→
+//   必须要求「任意相邻两行之间都空一行」（每行独立段落），抓取才能保住换行。
+// 输出结构必须与 buildSummaryToc 的解析（一、~五、 与附录【家名】）匹配，否则目录导航失效。
+const SUMMARY_CONTENT =
+  '你是一位中立的圆桌主持人。下面是同一个问题下多家 AI 的回答。' +
+  '请输出一份结构化总结，严格按以下五个部分组织：' +
+  '一、主要共识：归纳超过半数的参与家数一致的观点（8 家全参与时即 5 家及以上）；' +
+  '二、次要共识：2 家到 4 家一致的观点；' +
+  '三、分歧观点：任意两家及以上不一致的观点，说明各方立场与各自理由；' +
+  '四、个性观点：仅一家提出的独特观点；' +
+  '五、综合意见：综合各家意见，给出一个「最大公约数」的回答版本。' +
+  '每条观点后用括号注明持该观点的家名，如（千问、豆包、Kimi）；' +
+  '某部分没有内容时写「无」。' +
+  '结构层次用中文序号体现：一级标题（五个部分）用「一、二、三、四、五、」，' +
+  '二级标题（部分内的各小节）必须用「（一）（二）（三）」；' +
+  '小节内的具体条目用「1. 2. 3.」，再细分用「（1）（2）」。' +
+  '注意：二级标题一律用带括号的中文数字，不要用「1.」充当小节标题；' +
+  '直接以标题开头，不要任何开场白。' +
+  '不要输出附录或各家原文，附录由程序自动拼接。';
+
+// API 模式排版：原始文本直接返回，单换行即保留
+const SUMMARY_FORMAT_API =
+  '排版要求（必须严格遵守）：输出纯文本，严禁使用任何 Markdown 符号（#、*、-、>、` 等）；' +
+  '标题和条目各自独占一行，部分之间空一行。';
+
+// 网页模式排版：渲染→抓取会丢单换行，纯文本指令不可靠（2026-08-18 实测仍连成一行）。
+// 改用 Markdown 标题——标题必渲染成独立块级元素，innerText 抓取时块间换行天然保留，
+// 且 ## 被渲染剥离后抓回仍是干净中文序号文本，renderMarkdown/buildSummaryToc 均可识别。
+const SUMMARY_FORMAT_WEB =
+  '排版要求（必须严格遵守）：请用 Markdown 组织版面，确保每个标题独立成块。' +
+  '五个部分各用一个二级标题，依次为：## 一、主要共识，## 二、次要共识，## 三、分歧观点，## 四、个性观点，## 五、综合意见。' +
+  '部分内的小节用三级标题：### （一）…，### （二）…。' +
+  '小节内的条目用 Markdown 列表，每条一行、以 - 开头。' +
+  '观点后用括号注明家名，如（DeepSeek）。某部分没有内容时在该标题下写「无」。' +
+  '直接以第一个二级标题开头，不要开场白，不要输出附录或各家原文。';
+
+const SUMMARY_TEMPLATE = SUMMARY_CONTENT + SUMMARY_FORMAT_API;
+const SUMMARY_TEMPLATE_WEB = SUMMARY_CONTENT + SUMMARY_FORMAT_WEB;
+
 // 核心总结逻辑：按钮与飞书服务共用。成功返回总结文本；失败抛出错误（同时已更新 DOM）。
 let summarizeBusy = false; // 自动/手动触发共用的防重入锁
 async function doSummarize() {
   if (summarizeBusy) throw new Error('总结正在进行中');
   const settings = getSettings();
-  if (!settings.baseURL || !settings.apiKey || !settings.model) {
-    throw new Error('总结 LLM 未配置（baseURL/apiKey/model）');
-  }
   // 只纳入本轮范围内已完成的回复，失败/未完成的跳过（上一轮别家遗留不混入）
   const usable = roundScope().filter((p) => p.state === 'done' && p.reply);
   if (usable.length === 0) throw new Error('没有已完成的回复可供总结');
@@ -1104,44 +1264,22 @@ async function doSummarize() {
 
   summarizeBtn.disabled = true;
   summaryBody.className = 'summary-body placeholder';
-  summaryBody.textContent = `正在调用 ${settings.model} 总结…`;
+  summaryBody.textContent =
+    settings.summaryMode === 'api'
+      ? `正在调用 ${settings.model} 总结…`
+      : '正在 DeepSeek 网页（第二账号）生成总结…';
   summaryStatus.textContent = '总结中…';
   summaryStatus.className = 'card-state warn';
   summaryToc.hidden = true; // 新一轮总结生成前隐藏旧目录
   summaryToc.innerHTML = '';
   summaryAnchors.clear();
 
-  const blocks = usable.map((p) => `【${p.adapter.name}】\n${p.reply}`).join('\n\n');
-  const messages = [
-    {
-      role: 'system',
-      content:
-        '你是一位中立的圆桌主持人。下面是同一个问题下多家 AI 的回答。' +
-        '请输出一份结构化总结，严格按以下五个部分组织：' +
-        '一、主要共识：归纳超过半数的参与家数一致的观点（8 家全参与时即 5 家及以上）；' +
-        '二、次要共识：2 家到 4 家一致的观点；' +
-        '三、分歧观点：任意两家及以上不一致的观点，说明各方立场与各自理由；' +
-        '四、个性观点：仅一家提出的独特观点；' +
-        '五、综合意见：综合各家意见，给出一个「最大公约数」的回答版本。' +
-        '每条观点后用括号注明持该观点的家名，如（千问、豆包、Kimi）；' +
-        '某部分没有内容时写「无」。' +
-        '排版要求（必须严格遵守）：输出纯文本，严禁使用任何 Markdown 符号，' +
-        '包括 #、*、-、>、` 等；不要用星号表示加粗或列表。' +
-        '结构层次用中文序号体现：一级标题（五个部分）用「一、二、三、四、五、」，' +
-        '二级标题（部分内的各小节）必须用「（一）（二）（三）」；' +
-        '小节内的具体条目用「1. 2. 3.」，再细分用「（1）（2）」。' +
-        '注意：二级标题一律用带括号的中文数字，不要用「1.」充当小节标题；' +
-        '标题和条目各自独占一行，部分之间空一行，直接以标题开头，不要任何开场白。' +
-        '不要输出附录或各家原文，附录由程序自动拼接。',
-    },
-    {
-      role: 'user',
-      content: `共 ${usable.length} 家回答${skipped.length ? `（${skipped.join('、')} 未纳入）` : ''}：\n\n${blocks}`,
-    },
-  ];
-
   try {
-    const raw = await roundtable.callLLM({ ...settings, messages });
+    // 网页模式：DeepSeek 第二账号生成；API 模式：OpenAI 兼容接口（备选）
+    const raw =
+      settings.summaryMode === 'api'
+        ? await summarizeViaAPI(settings, usable, skipped)
+        : await summarizeViaWeb(usable, skipped);
     // 附录由程序拼接（保证各家原文逐字完整，不靠 LLM 复述）
     let appendix = '\n\n附录：各家意见（原文）';
     for (const p of usable) appendix += `\n\n【${p.adapter.name}】\n${p.reply}`;
@@ -1165,6 +1303,211 @@ async function doSummarize() {
     summarizeBusy = false;
     summarizeBtn.disabled = false;
   }
+}
+
+// API 总结路径（OpenAI 兼容接口，设置里配置；作为网页总结的备选保留）
+async function summarizeViaAPI(settings, usable, skipped) {
+  if (!settings.baseURL || !settings.apiKey || !settings.model) {
+    throw new Error('总结 LLM 未配置（baseURL/apiKey/model），请在设置里改用网页总结或补全配置');
+  }
+  const blocks = usable.map((p) => `【${p.adapter.name}】\n${p.reply}`).join('\n\n');
+  const messages = [
+    { role: 'system', content: SUMMARY_TEMPLATE },
+    {
+      role: 'user',
+      content: `共 ${usable.length} 家回答${skipped.length ? `（${skipped.join('、')} 未纳入）` : ''}：\n\n${blocks}`,
+    },
+  ];
+  const raw = await roundtable.callLLM({ ...settings, messages });
+  return raw.trim();
+}
+
+// ================= 网页总结（DeepSeek 第二账号，独立分区）=================
+// 【回退模式】各家原文截断上限：附件上传不可用时退化为纯文本提示词，
+// 此时控制总长度（8 家约 1.6 万字）防超出网页输入框限制。
+const WEB_SUMMARY_PER_FAMILY_LIMIT = 2000;
+// 长总结（五段结构、数千字）生成较慢；超时判失败，用户可重试或切 API
+const WEB_SUMMARY_TIMEOUT = 300000;
+
+// 【附件模式】docx 内容：模板要求 + 问题 + 各家无删减原文（回复抓取时已天然限 8000 字/家）。
+// 整份进附件，输入框只发一句短指令，彻底绕开输入框字数限制。
+function buildUploadMarkdown(usable, skipped) {
+  const blocks = usable.map((p) => `【${p.adapter.name}】\n${p.reply}`).join('\n\n');
+  return (
+    SUMMARY_TEMPLATE_WEB +
+    `\n\n任务问题：${currentQuestion || '（未提供）'}` +
+    `\n\n下面是同一个问题下 ${usable.length} 家 AI 的回答${skipped.length ? `（${skipped.join('、')} 未纳入）` : ''}，` +
+    '请根据这些回答直接输出五段总结：\n\n' +
+    blocks
+  );
+}
+
+// 【回退模式】提示词：模板要求在前 + 各家回复（截断）在后
+function buildWebSummaryPrompt(usable, skipped) {
+  const blocks = usable
+    .map((p) => {
+      let t = p.reply;
+      if (t.length > WEB_SUMMARY_PER_FAMILY_LIMIT) {
+        t = t.slice(0, WEB_SUMMARY_PER_FAMILY_LIMIT) + '…（过长已截断）';
+      }
+      return `【${p.adapter.name}】\n${t}`;
+    })
+    .join('\n\n');
+  return (
+    SUMMARY_TEMPLATE_WEB +
+    `\n\n下面是同一个问题下 ${usable.length} 家 AI 的回答${skipped.length ? `（${skipped.join('、')} 未纳入）` : ''}，` +
+    '请根据这些回答直接输出五段总结：\n\n' +
+    blocks
+  );
+}
+
+// 把附件文件上传进总结者页面：优先直接找 input[type=file]（CDP 直塞文件）；
+// 找不到时按 uploadSelectors 逐个点击附件按钮候选，等它进 DOM 再试。成功返回 true。
+async function tryUploadFile(sp, filePath) {
+  let wcId;
+  try {
+    wcId = sp.webview.getWebContentsId();
+  } catch {
+    return false;
+  }
+  const setFiles = () => roundtable.setFileInput(wcId, filePath);
+  try {
+    await setFiles();
+    return true;
+  } catch {}
+  for (const sel of SUMMARIZER.uploadSelectors || []) {
+    try {
+      const clicked = await execInPanel(
+        sp.webview,
+        `(function () {
+          var els = document.querySelectorAll(${JSON.stringify(sel)});
+          for (var i = 0; i < els.length; i++) {
+            var r = els[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) { els[i].click(); return true; }
+          }
+          return false;
+        })()`
+      );
+      if (!clicked) continue;
+      await sleep(1000);
+      await setFiles();
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+// 附件刚经 CDP 塞入时，发送按钮有一段禁用窗口（2026-08-18 实测 t=0 disabled、
+// 约 1~5s 恢复 pointer），期间点击/回车都会被静默吞掉，输入框残留文本并最终报
+// "发送未生效"。发送前轮询等待按钮恢复可点；超时则照常尝试，由 sendToPanel 自行报错。
+async function waitSendReady(webview) {
+  const probe = `(function () {
+    var btn = document.querySelector('div[role="button"].ds-button--primary.ds-button--filled');
+    if (!btn) return true; // 按钮不存在（页面改版）时不阻塞，交给后续流程报错
+    return !/disable/i.test(btn.className) && getComputedStyle(btn).cursor !== 'not-allowed';
+  })()`;
+  for (let i = 0; i < 15; i++) {
+    try {
+      if (await execInPanel(webview, probe)) return;
+    } catch {}
+    await sleep(1000);
+  }
+}
+
+// 网页总结：全屏展开总结者面板 → 回首页开新会话 → 发模板提示词 → 轮询抓取至稳定。
+// 总结者账号只做总结：每次都从站点首页进入（等同新会话），上下文不跨轮累积，
+// 与参与回答的 deepseek 面板互不干扰。
+async function summarizeViaWeb(usable, skipped) {
+  const sp = summarizerPanel;
+  // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（飞书/HTTP 服务轮次）不打扰
+  if (!document.hidden) focusPanel(SUMMARIZER.id);
+
+  setStatus(sp.statusEl, '正在打开新总结会话…');
+  sp.webview.loadURL(SUMMARIZER.url).catch(() => {});
+  await waitWebviewReady(sp.webview, 60000);
+  await sleep(3000); // 等 SPA 初始化出输入框
+
+  // 基线：发送前抓到的内容都算旧的；发送后若始终只能抓到它，说明新总结还没到
+  let baseline = '';
+  try {
+    const pre = await execInPanel(sp.webview, buildScrapeScript(SUMMARIZER, ''));
+    if (pre && pre.ok && !pre.pending) baseline = cleanReply(pre.text);
+  } catch {}
+
+  // 附件模式优先：模板+各家无删减原文进 docx 上传，输入框只发短指令（绕开字数限制）；
+  // 上传不可用（未找到文件输入框等）时回退为截断文本提示词
+  let sendText;
+  const file = await roundtable.buildUploadFile(buildUploadMarkdown(usable, skipped)).catch(() => null);
+  let uploaded = false;
+  if (file && file.ok && file.path) {
+    setStatus(sp.statusEl, '正在上传原文附件…');
+    uploaded = await tryUploadFile(sp, file.path);
+  }
+  if (uploaded) {
+    setStatus(sp.statusEl, '等待附件就绪…');
+    await waitSendReady(sp.webview);
+    sendText = '请阅读附件，严格按附件开头的要求输出五段总结，不要输出附录或各家原文。';
+  } else {
+    setStatus(sp.statusEl, '附件上传不可用，改用文本模式…');
+    sendText = buildWebSummaryPrompt(usable, skipped);
+  }
+
+  setStatus(sp.statusEl, '正在发送总结请求…');
+  let res = await sendToPanel(SUMMARIZER, sp.webview, sendText);
+  if (!res || !res.ok) {
+    await sleep(1500);
+    res = await sendToPanel(SUMMARIZER, sp.webview, sendText);
+  }
+  if (!res || !res.ok) {
+    setStatus(sp.statusEl, '发送失败');
+    throw new Error(
+      `DeepSeek 总结发送失败：${(res && res.error) || '未知'}。若尚未登录，请在全屏页面手动登录第二个账号后再点「总结」`
+    );
+  }
+  setStatus(sp.statusEl, '生成中…');
+
+  // 轮询抓取：连续多轮稳定且不同于基线才算完成（判据与回答抓取一致）
+  const start = Date.now();
+  let lastText = '';
+  let stable = 0;
+  while (Date.now() - start < WEB_SUMMARY_TIMEOUT) {
+    await sleep(3000);
+    summaryStatus.textContent = `总结中… ${Math.round((Date.now() - start) / 1000)}s`;
+    let r;
+    try {
+      r = await execInPanel(sp.webview, buildScrapeScript(SUMMARIZER, ''));
+    } catch {
+      continue; // 执行超时，下轮再试
+    }
+    if (!r || !r.ok) continue;
+    // 页面仍在生成（含 watchStop 的停止按钮判据）：清零稳定计数继续等
+    if (r.pending) {
+      stable = 0;
+      lastText = '';
+      continue;
+    }
+    const t = cleanReply(r.text);
+    if (!t || t === baseline) {
+      stable = 0;
+      continue;
+    }
+    if (t === lastText) {
+      stable += 1;
+    } else {
+      lastText = t;
+      stable = 0;
+    }
+    // 计数达到 3 判完成（含变化首轮共约 12 秒稳定，与回答抓取判据一致）；
+    // 超短内容几乎必是噪声，要求 8 轮
+    const need = lastText.length < 10 ? 8 : 3;
+    if (stable >= need) {
+      setStatus(sp.statusEl, '总结已生成');
+      unfocusPanel(); // 收起全屏面板，让总结面板的结构化结果直接可见（失败时保持展开便于排查）
+      return lastText;
+    }
+  }
+  setStatus(sp.statusEl, '等待超时');
+  throw new Error('DeepSeek 网页总结等待超时（300 秒），请再点「总结」重试，或在设置中改用 API 总结');
 }
 
 // 桌面端总结 + 落库（按钮与自动总结共用；同一轮防重复落库）
@@ -1194,7 +1537,11 @@ async function summarizeWhenIdle() {
 
 summarizeBtn.addEventListener('click', async () => {
   const settings = getSettings();
-  if (!settings.baseURL || !settings.apiKey || !settings.model) {
+  // 仅 API 模式需要预先配置；网页模式直接跑（未登录会在错误里给出引导）
+  if (
+    settings.summaryMode === 'api' &&
+    (!settings.baseURL || !settings.apiKey || !settings.model)
+  ) {
     openSettings();
     return;
   }
@@ -1249,6 +1596,11 @@ document.getElementById('summary-save').addEventListener('click', async (e) => {
 
 document.getElementById('summary-top').addEventListener('click', () => {
   summaryBody.scrollTop = 0;
+});
+
+// 「📋 总结」标题：点开 DeepSeek 总结账号页面（仅全屏展开供手动登录第二账号，不触发总结）
+document.getElementById('summary-title').addEventListener('click', () => {
+  focusPanel(SUMMARIZER.id);
 });
 
 // ================= 飞书服务编排（Phase 2） =================
@@ -1317,13 +1669,24 @@ roundtable.onServiceAsk(async ({ requestId, question, sites }) => {
 
 // ================= 设置弹窗 =================
 const modal = document.getElementById('settings-modal');
+const cfgModeWeb = document.getElementById('cfg-mode-web');
+const cfgModeApi = document.getElementById('cfg-mode-api');
+const cfgApiFields = document.getElementById('cfg-api-fields');
 const cfgBaseURL = document.getElementById('cfg-baseurl');
 const cfgApiKey = document.getElementById('cfg-apikey');
 const cfgModel = document.getElementById('cfg-model');
 const cfgAutoSummary = document.getElementById('cfg-autosummary');
 
+// 网页总结选中时，API 配置区整体置灰（保留为备选，不隐藏）
+function syncSummaryModeUI() {
+  cfgApiFields.classList.toggle('cfg-api-off', cfgModeWeb.checked);
+}
+
 function openSettings() {
   const s = getSettings();
+  cfgModeWeb.checked = s.summaryMode === 'web';
+  cfgModeApi.checked = s.summaryMode === 'api';
+  syncSummaryModeUI();
   cfgBaseURL.value = s.baseURL;
   cfgApiKey.value = s.apiKey;
   cfgModel.value = s.model;
@@ -1334,7 +1697,10 @@ function openSettings() {
 document.getElementById('settings-btn').addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', () => (modal.hidden = true));
 document.getElementById('cfg-cancel').addEventListener('click', () => (modal.hidden = true));
+cfgModeWeb.addEventListener('change', syncSummaryModeUI);
+cfgModeApi.addEventListener('change', syncSummaryModeUI);
 document.getElementById('cfg-save').addEventListener('click', () => {
+  localStorage.setItem('rt_summaryMode', cfgModeApi.checked ? 'api' : 'web');
   localStorage.setItem('rt_baseURL', cfgBaseURL.value.trim());
   localStorage.setItem('rt_apiKey', cfgApiKey.value.trim());
   localStorage.setItem('rt_model', cfgModel.value.trim());

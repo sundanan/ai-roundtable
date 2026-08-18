@@ -65,8 +65,34 @@ const http = require('http');
 const ROUNDTABLE_PORT = Number(process.env.ROUNDTABLE_PORT || 8765); // 仅监听 127.0.0.1
 
 let mainWindow = null;
-// requestId -> { source:'feishu'|'http', chatId?, httpRes?, question }，结果回来时按来源路由
+// requestId -> { source:'feishu'|'http', chatId?, httpRes?, question, watchdog? }，结果回来时按来源路由
 const pendingRounds = new Map();
+
+// 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 12 分钟
+// （轮次等待 420s + 网页总结 300s + 发送/抓取余量）。超过 15 分钟仍无回报，
+// 基本可判定 renderer 崩溃/卡死——若不主动释放，pendingRounds 永久非空，
+// 飞书/HTTP 会一直 busy/429，整个服务卡死到重启。这里兜底清理并回报超时。
+const ROUND_WATCHDOG_MS = 15 * 60 * 1000;
+function armRoundWatchdog(requestId) {
+  const pending = pendingRounds.get(requestId);
+  if (!pending) return;
+  pending.watchdog = setTimeout(() => {
+    if (!pendingRounds.has(requestId)) return; // 已被正常回报清掉
+    pendingRounds.delete(requestId);
+    console.error(`[watchdog] 轮次 ${requestId} 超过 ${ROUND_WATCHDOG_MS / 60000} 分钟未回报，强制释放 busy`);
+    if (pending.source === 'http' && pending.httpRes) {
+      try {
+        jsonResponse(pending.httpRes, 504, { ok: false, error: 'round-timeout', message: '本轮处理超时（15 分钟未回报），请重试' });
+      } catch {}
+    } else if (bridge && pending.chatId) {
+      bridge.sendText(pending.chatId, '本轮处理超时（15 分钟未回报），请重新发送问题').catch(() => {});
+    }
+  }, ROUND_WATCHDOG_MS);
+}
+function clearRoundWatchdog(requestId) {
+  const pending = pendingRounds.get(requestId);
+  if (pending && pending.watchdog) clearTimeout(pending.watchdog);
+}
 
 // 纯文本格式化：总结（内含附录各家原文，由 renderer 拼接）——飞书用
 function formatResultText(data) {
@@ -147,6 +173,7 @@ try {
       }
       pendingRounds.set(requestId, { source: 'feishu', chatId, question });
       if (startRound(requestId, question)) {
+        armRoundWatchdog(requestId);
         bridge.sendText(chatId, `收到：${question}\n正在问 8 家，请稍候…`).catch(() => {});
       } else {
         pendingRounds.delete(requestId);
@@ -202,8 +229,9 @@ const httpServer = http.createServer(async (req, res) => {
         pendingRounds.delete(requestId);
         return jsonResponse(res, 503, { ok: false, error: 'not-ready', message: '服务窗口尚未就绪' });
       }
+      armRoundWatchdog(requestId);
       console.log(`[http] 收到问题: ${question}${sites ? '（子集:' + sites.join(',') + '）' : ''}`);
-      return; // 响应挂起，待 service:result 写回
+      return; // 响应挂起，待 service:result 写回（看门狗兜底超时释放）
     }
     // 改进1：单条历史详情 GET /history/item?id=xxx（须放在 /history 列表之前判断）
     if (req.method === 'GET' && req.url.startsWith('/history/item')) {
@@ -240,6 +268,7 @@ const httpServer = http.createServer(async (req, res) => {
 ipcMain.on('service:result', async (_event, data) => {
   const pending = pendingRounds.get(data.requestId);
   if (!pending) return;
+  clearRoundWatchdog(data.requestId); // 正常回报，撤掉超时兜底
   pendingRounds.delete(data.requestId);
 
   // 改进1：落库历史记录（跳过 busy/无数据轮次）
@@ -321,6 +350,55 @@ ipcMain.handle('save-markdown', async (_event, defaultName, content) => {
   if (canceled || !filePath) return { ok: false, canceled: true };
   fs.writeFileSync(filePath, content, 'utf8');
   return { ok: true, filePath };
+});
+
+// ===== 网页总结附件（DeepSeek 第二账号）：生成 docx + CDP 直传文件输入框 =====
+// 生成「模板 + 各家无删减原文」的 docx（pandoc 复用；失败回退 md）供总结者上传，
+// 解除网页输入框字数限制。固定文件名、每轮覆盖，避免临时文件堆积；
+// 文件须保留在磁盘上直到 DeepSeek 把附件上传走（站点在发送时读取磁盘文件）。
+ipcMain.handle('build-upload-file', async (_event, markdown) => {
+  try {
+    const dir = path.join(app.getPath('userData'), 'summaries');
+    fs.mkdirSync(dir, { recursive: true });
+    const mdPath = path.join(dir, '圆桌总结任务.md');
+    const docxPath = path.join(dir, '圆桌总结任务.docx');
+    fs.writeFileSync(mdPath, markdown, 'utf8');
+    try { fs.unlinkSync(docxPath); } catch {}
+    await new Promise((resolve) => {
+      // hard_line_breaks：模板与原文是单换行纯文本，缺此参数 pandoc 会把换行折叠成空格
+      execFile('pandoc', ['-f', 'markdown+hard_line_breaks', mdPath, '-o', docxPath], { timeout: 30000 }, () => resolve());
+    });
+    if (fs.existsSync(docxPath)) return { ok: true, path: docxPath };
+    return { ok: true, path: mdPath }; // pandoc 不可用时直接上传 md 原文
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+// 经 CDP 把磁盘文件直接塞进 webview 的 <input type="file">（同 Playwright setInputFiles）：
+// 不弹原生文件对话框，页面 change 事件正常触发，站点能识别到附件
+ipcMain.handle('set-file-input', async (_event, webContentsId, filePath) => {
+  const wc = webContents.fromId(webContentsId);
+  if (!wc) throw new Error('webview 尚未就绪');
+  const dbg = wc.debugger;
+  let attached = false;
+  try {
+    dbg.attach('1.3');
+    attached = true;
+    const doc = await dbg.sendCommand('DOM.getDocument', { depth: -1 });
+    const found = await dbg.sendCommand('DOM.querySelectorAll', {
+      nodeId: doc.root.nodeId,
+      selector: 'input[type="file"]',
+    });
+    const nodeIds = (found && found.nodeIds) || [];
+    if (!nodeIds.length) throw new Error('未找到 input[type=file]（尝试点击附件按钮展开）');
+    await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: nodeIds[0] });
+    return { ok: true, inputs: nodeIds.length };
+  } finally {
+    if (attached) {
+      try { dbg.detach(); } catch {}
+    }
+  }
 });
 
 async function createWindow() {

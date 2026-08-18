@@ -11,11 +11,12 @@
   <!-- 第一层：输入框 + 右侧按钮组（发送占两行高；总结横跨；设置/历史两小格） -->
   <header class="topbar">
     <div class="composer">
+      <button id="new-btn" title="清空输入框，准备新问题">＋</button>
       <textarea id="prompt" rows="3"
         placeholder="输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）"></textarea>
       <div class="composer-actions">
         <button id="send-btn" title="发送到勾选各家（Ctrl+Enter）">发送</button>
-        <button id="summarize-btn" class="primary" title="提交 LLM 总结" disabled>总结</button>
+        <button id="summarize-btn" class="primary" title="生成圆桌总结（方式见设置）" disabled>总结</button>
         <button id="settings-btn" title="总结模型设置">设置</button>
         <button id="history-btn" title="历史记录">历史</button>
       </div>
@@ -41,7 +42,7 @@
       <div id="divider" title="拖拽调整左右宽度"></div>
       <div id="summary-panel">
         <div class="summary-head">
-          <span>📋 总结</span>
+          <span id="summary-title" title="点开 DeepSeek 总结账号页面（手动登录第二账号用）">📋 总结</span>
           <span class="summary-actions">
             <button id="summary-copy" class="mini" title="复制总结全文">复制</button>
             <button id="summary-save" class="mini" title="保存总结为 Markdown 文件">存为 MD</button>
@@ -65,20 +66,32 @@
   <div id="settings-modal" class="modal-mask" hidden>
     <div class="modal">
       <button class="modal-close" id="settings-close" title="关闭">✕</button>
-      <h2>总结模型设置（OpenAI 兼容 API）</h2>
-      <label>Base URL
-        <input id="cfg-baseurl" type="text" placeholder="https://api.deepseek.com/v1">
-      </label>
-      <label>API Key
-        <input id="cfg-apikey" type="password" placeholder="sk-...">
-      </label>
-      <label>模型名
-        <input id="cfg-model" type="text" placeholder="deepseek-chat">
-      </label>
+      <h2>总结设置</h2>
+      <div class="cfg-mode">
+        <label class="cfg-check">
+          <input type="radio" name="cfg-summary-mode" id="cfg-mode-web" checked>
+          网页总结 · DeepSeek 第二账号（免费；首次使用点「总结」后在全屏页面手动登录）
+        </label>
+        <label class="cfg-check">
+          <input type="radio" name="cfg-summary-mode" id="cfg-mode-api">
+          API 总结 · OpenAI 兼容接口（备选）
+        </label>
+      </div>
+      <div id="cfg-api-fields">
+        <label>Base URL
+          <input id="cfg-baseurl" type="text" placeholder="https://api.deepseek.com/v1">
+        </label>
+        <label>API Key
+          <input id="cfg-apikey" type="password" placeholder="sk-...">
+        </label>
+        <label>模型名
+          <input id="cfg-model" type="text" placeholder="deepseek-chat">
+        </label>
+      </div>
       <label class="cfg-check">
         <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结（桌面端）
       </label>
-      <p class="modal-tip">配置仅保存在本机（localStorage），不会发送到任何网页。</p>
+      <p class="modal-tip">网页总结复用浏览器里手动登录的 DeepSeek 账号，无需 API Key；API 配置仅保存在本机（localStorage）。</p>
       <div class="modal-actions">
         <button id="cfg-save" class="primary">保存</button>
         <button id="cfg-cancel">取消</button>

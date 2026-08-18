@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld('roundtable', {
 
   // ===== 总结导出 =====
   saveMarkdown: (name, content) => ipcRenderer.invoke('save-markdown', name, content),
+
+  // ===== 网页总结附件（DeepSeek 第二账号）=====
+  buildUploadFile: (markdown) => ipcRenderer.invoke('build-upload-file', markdown),
+  setFileInput: (webContentsId, filePath) =>
+    ipcRenderer.invoke('set-file-input', webContentsId, filePath),
 });

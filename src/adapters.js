@@ -138,12 +138,22 @@ const ADAPTERS = [
     id: 'deepseek',
     name: 'DeepSeek',
     url: 'https://chat.deepseek.com/',
+    // 2026-08-17 实测：输入框无 id（#chat-input 失效），class 含稳定的 ds-scroll-area，
+    // placeholder 为「给 DeepSeek 发送消息」；页面常驻隐藏 input[type=file]（accept 含 docx/md），
+    // 附件可经 CDP DOM.setFileInputFiles 直塞，无需点击
+    // 排除思考块：DeepSeek 深度思考内容容器真实类名为 ds-think-content
+    // （2026-08-18 CDP 实测；[class*=thought]/[class*=thinking] 均不匹配）
+    pruneSelectors: ['.ds-think-content'],
     inputSelectors: [
-      'textarea#chat-input',
+      'textarea.ds-scroll-area',
       'textarea[placeholder*="DeepSeek"]',
+      'textarea#chat-input',
       'textarea',
     ],
+    // 2026-08-18 改版后按钮类名不再含 send：发送键是主色实心圆形按钮
+    // （ds-button--primary ds-button--filled），实测页面唯一
     sendSelectors: [
+      'div[role="button"].ds-button--primary.ds-button--filled',
       'div[role="button"][class*="send"]',
       'button[class*="send"]',
     ],
@@ -202,3 +212,46 @@ const ADAPTERS = [
     ],
   },
 ];
+
+/**
+ * 总结者：DeepSeek 网页版「第二账号」，专职生成圆桌总结。
+ * 使用独立分区（persist:deepseek-sum），与参与广播的 deepseek 面板会话完全隔离，
+ * 总结不会污染回答流程；选择器与上方 deepseek 条目保持同步维护。
+ */
+const SUMMARIZER = {
+  id: 'deepseek-sum',
+  name: 'DeepSeek·总结',
+  url: 'https://chat.deepseek.com/',
+  // 长总结生成慢：靠"停止生成"按钮可见性保持等待，避免提前判完成
+  watchStop: true,
+  // 排除思考/推理块：ds-think-content 为 DeepSeek 真实类名（2026-08-18 CDP 实测），
+  // 其余为历史猜测值，不存在时不剪枝，无害
+  pruneSelectors: ['.ds-think-content', '[class*="thought"]', '[class*="thinking"]'],
+  // 附件上传按钮候选（备用）：2026-08-17 实测页面常驻隐藏 input[type=file]（accept 含 docx/md），
+  // 正常走 CDP 直塞即可；仅当改版后直塞失败才按序点击这些候选把输入框展开出来
+  uploadSelectors: [
+    '[class*="attach" i]',
+    '[aria-label*="附件" i]',
+    '[aria-label*="upload" i]',
+    '[data-testid*="attach" i]',
+    '[class*="upload" i]',
+    '[class*="clip" i]',
+  ],
+  inputSelectors: [
+    'textarea.ds-scroll-area',
+    'textarea[placeholder*="DeepSeek"]',
+    'textarea#chat-input',
+    'textarea',
+  ],
+  // 与 deepseek 条目同步：改版后发送键为主色实心圆形按钮，类名不含 send
+  sendSelectors: [
+    'div[role="button"].ds-button--primary.ds-button--filled',
+    'div[role="button"][class*="send"]',
+    'button[class*="send"]',
+  ],
+  responseSelectors: [
+    '[class*="markdown"]',
+    '.ds-markdown',
+    '[class*="message"] [class*="content"]',
+  ],
+};

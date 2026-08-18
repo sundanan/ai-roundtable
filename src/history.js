@@ -31,7 +31,11 @@ function saveRound(entry) {
   try {
     const list = load();
     list.push(entry);
-    fs.writeFileSync(getPath(), JSON.stringify(list.slice(-MAX_ENTRIES)));
+    // 原子写（#2）：先写临时文件再 rename，避免写一半崩溃损坏历史文件
+    const data = JSON.stringify(list.slice(-MAX_ENTRIES));
+    const tmp = getPath() + '.tmp';
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, getPath());
     return true;
   } catch (e) {
     console.error('[history] 保存失败:', e && e.message);

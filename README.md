@@ -23,7 +23,7 @@
 
 - 每家一个独立 webview，登录态通过 `persist:` 分区持久化，重启不丢；
 - 引擎每 3 秒轮询抓取回复，内置防误判机制：问题回音排除、"思考中/搜索中"占位识别、陈旧回复检测、发送失败自动重试；
-- 全部交卷（或到达轮次上限）后，调用你配置的任意 OpenAI 兼容 API 生成总结。
+- 全部交卷（或到达轮次上限）后生成五段结构化总结：默认 **网页总结**——DeepSeek 第二账号（独立分区、免 API Key），各家无删减原文合成 docx 以附件上传、绕开输入框字数限制；设置里可切换为任意 OpenAI 兼容 API（备选）。
 
 ## 三种入口
 
@@ -46,7 +46,7 @@ Electron 需要显示环境（窗口与 webview 必须真实渲染），无头�
 ## 配置
 
 1. **登录各家账号**：`npm start` 启动后，双击第二排每个模型按钮进入全屏，手动登录一次；
-2. **配置总结模型**：点「设置」，填任意 OpenAI 兼容 API 的 Base URL / API Key / 模型名（如 `https://api.deepseek.com/v1` + `deepseek-chat`）。配置只存本机 localStorage；
+2. **总结方式**：默认**网页总结**——点「总结」后首次会全屏展开 DeepSeek 页面，手动登录一个第二账号即可（免费、无需 API Key）；如需 **API 总结**，在「设置」勾选「API 总结」并填任意 OpenAI 兼容 API 的 Base URL / API Key / 模型名。配置只存本机 localStorage；
 3. **飞书入口（可选）**：在 [飞书开放平台](https://open.feishu.cn) 创建企业自建应用，开通机器人能力，事件订阅选「长连接」模式并订阅 `im.message.receive_v1`，然后把 App ID/Secret 填入 `.env`（参照 `.env.example`）。不配置飞书不影响桌面端与 HTTP 接口。
 
 ## 运行
