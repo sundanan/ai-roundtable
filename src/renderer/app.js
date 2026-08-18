@@ -543,6 +543,13 @@ function buildScrapeScript(adapter, question) {
   })()`;
 }
 
+// 整条"回复"恰为界面标签/按钮文字的噪声：不是答案，返回空让轮询继续等待、
+// 最终按未取到处理（2026-08-18 实测：文心把「深度思考」模式切换按钮的 4 字标签当交卷答案）
+const NOISE_LABELS = new Set([
+  '深度思考', '深度思考中', '联网搜索', '全网搜索', '通知', '思考中', '生成中',
+  '复制', '重新生成', '展开', '收起', '查看更多', '加载更多',
+]);
+
 // 清洗抓到的回复：截断「猜你想问」类推荐区块，去掉尾部按钮文字（编辑/复制/分享…）
 function cleanReply(text) {
   const CUT_MARKERS = /^(你可能想问|猜你想问|相关问题|相关视频|为你推荐|推荐问题|推荐追问|继续提问|继续追问)/;
@@ -554,7 +561,8 @@ function cleanReply(text) {
   while (lines.length && (lines[lines.length - 1].trim() === '' || TRAIL.test(lines[lines.length - 1].trim()))) {
     lines.pop();
   }
-  return lines.join('\n').trim();
+  const out = lines.join('\n').trim();
+  return NOISE_LABELS.has(out) ? '' : out;
 }
 
 // ================= 执行通道 =================
@@ -653,9 +661,17 @@ let activeRoundIds = null; // 本轮参与面板 id 集合；null=全部（改�
 let desktopRoundSaved = false; // 改进1：桌面端本轮是否已落库（防重复总结时重复落库）
 let roundSettleHandled = false; // 本轮"全部到终态"收尾是否已做（完成通知/自动总结只触发一次）
 
-// 单家发送任务：抓基线 → 发送（失败重试一次 → 标记的家刷新重发）→ 更新状态。
+// 单家发送任务：重置会话 → 抓基线 → 发送（失败重试一次 → 标记的家刷新重发）→ 更新状态。
 // 广播与单家补发共用。
 async function runSendTask(p, text) {
+  // 每轮开新会话：先回站点入口页再提问，避免上一轮问答留在模型上下文里
+  // （2026-08-18 实测 deepseek 面板连续三轮进同一会话，回答互相污染、
+  // 交叉验证失真；总结者面板一直是同样做法）。适配器可设 resetBeforeSend:false 退出。
+  if (p.adapter.resetBeforeSend !== false) {
+    try { p.webview.loadURL(p.adapter.url).catch(() => {}); } catch {}
+    await waitWebviewReady(p.webview);
+    await sleep(4000); // 等 SPA 初始化出输入框
+  }
   // 发送前先抓当前"上一条回复"作基线：本轮若始终抓到同样的内容，说明是新回复没到，
   // 不能把上一轮遗留当成本轮答案（曾导致 4 家回陈旧内容）。
   try {

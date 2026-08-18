@@ -7,6 +7,8 @@
  *  - inputSelectors / sendSelectors：注入发送时按顺序尝试的 CSS 选择器，
  *    都找不到时回退到通用的「可见 textarea / contenteditable」探测。
  *  - responseSelectors：抓取最后一条 AI 回复时按顺序尝试的选择器。
+ *  - resetBeforeSend（可选，默认 true）：每轮发送前先回 url 开新会话，
+ *    避免上一轮问答留在模型上下文里；某站入口页会恢复旧会话时可设 false 退出。
  *
  * 各家网页改版后只需更新这里的对应条目，无需改其他代码。
  * 选择器均为尽力维护的猜测值，失效时请按 README 的方法更新。
