@@ -128,8 +128,9 @@ function buildSummaryDocx(question, summary) {
       fs.mkdirSync(dir, { recursive: true });
       const d = new Date();
       const pad = (n) => String(n).padStart(2, '0');
+      // 时间戳精确到秒：同分钟两轮不再互相覆盖
       const stamp =
-        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
       const docxPath = path.join(dir, `圆桌总结-${stamp}.docx`);
       const mdPath = path.join(dir, `圆桌总结-${stamp}.md`);
       const doc =
@@ -147,6 +148,14 @@ function buildSummaryDocx(question, summary) {
           return resolve(null);
         }
         resolve(docxPath);
+        // 保留最近 50 份总结 docx（文件名含时间戳、字典序即时序），防止目录无限增长
+        try {
+          const olds = fs.readdirSync(dir)
+            .filter((f) => /^圆桌总结-\d{8}-\d{4,6}\.docx$/.test(f))
+            .sort()
+            .reverse();
+          for (const f of olds.slice(50)) fs.unlinkSync(path.join(dir, f));
+        } catch {}
       });
     } catch (e) {
       console.error('[docx] 生成失败:', e && e.message);
@@ -326,9 +335,14 @@ ipcMain.on('service:result', async (_event, data) => {
   });
 });
 
-// renderer 上报进度（Phase 2 仅记录；Phase 3 用于增量更新卡片）
+// renderer 上报进度（Phase 2 仅记录；Phase 3 用于增量更新卡片）。
+// 3s 轮询期间进度几乎总是不变，内容相同不重复打印（曾一日 1200+ 行重复进度）
+let lastProgressLine = '';
 ipcMain.on('service:progress', (_event, data) => {
-  console.log(`[feishu] 进度 done=${data.done}/${data.total} 生成中=${data.generating} 失败=${data.error}`);
+  const line = `进度 done=${data.done}/${data.total} 生成中=${data.generating} 失败=${data.error}`;
+  if (line === lastProgressLine) return;
+  lastProgressLine = line;
+  console.log(`[feishu] ${line}`);
 });
 
 // ===== 历史记录（改进1，桌面端同步）=====
