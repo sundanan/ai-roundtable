@@ -48,16 +48,20 @@ Electron 需要显示环境（窗口与 webview 必须真实渲染），无头�
 1. **登录各家账号**：`npm start` 启动后，双击第二排每个模型按钮进入全屏，手动登录一次；
 2. **总结方式**：默认**网页总结**——点「总结」后首次会全屏展开 DeepSeek 页面，手动登录一个第二账号即可（免费、无需 API Key）；如需 **API 总结**，在「设置」勾选「API 总结」并填任意 OpenAI 兼容 API 的 Base URL / API Key / 模型名。配置只存本机 localStorage；
 3. **飞书入口（可选）**：在 [飞书开放平台](https://open.feishu.cn) 创建企业自建应用，开通机器人能力，事件订阅选「长连接」模式并订阅 `im.message.receive_v1`，然后把 App ID/Secret 填入 `.env`（参照 `.env.example`）。不配置飞书不影响桌面端与 HTTP 接口。
+   可选在 `.env` 配 `FEISHU_ALLOW_CHAT_IDS`（逗号分隔 chat_id 白名单，防陌生人/无关群消耗账号额度）；群消息无论是否在名单内都必须 @机器人 才触发。
 
 ## 运行
 
 ```bash
 npm start            # 前台运行（日志直接输出）
-bash service.sh      # 常驻服务（日志写入 ~/ai-roundtable-service.log）
+systemctl --user start ai-roundtable    # 推荐：systemd 用户服务（崩溃自动重启）
 ```
 
+systemd 用户服务开机自启（经 `~/.config/autostart/ai-roundtable.desktop` 拉起，登录后自动运行），
+进程崩溃（如 GPU FATAL）5 秒后自动重启；手动方式 `bash service.sh` 仍可用（日志写入 `~/ai-roundtable-service.log`，超 20MB 自动截断）。
+日常管理：`systemctl --user status|restart|stop ai-roundtable`。
+
 关窗不退出，应用隐藏到托盘常驻；托盘菜单可重新显示窗口或退出。
-如需开机自启，可参照 `~/.config/autostart/` 自建 `.desktop` 指向 `service.sh`。
 
 ## HTTP 接口（仅监听 127.0.0.1）
 
