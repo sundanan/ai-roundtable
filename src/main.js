@@ -2,8 +2,36 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, screen, web
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-// 先加载 .env（FEISHU_APP_ID / FEISHU_APP_SECRET），再引入飞书桥接
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+// 加载 .env（FEISHU_APP_ID / FEISHU_APP_SECRET，再引入飞书桥接）：
+// 开发版用仓库根目录的 .env；安装版（deb）应用目录不可写，改用用户数据目录
+// ~/.config/ai-roundtable/.env，首次运行不存在时自动生成模板供用户填写
+(function loadEnv() {
+  const devEnv = path.join(__dirname, '..', '.env');
+  if (fs.existsSync(devEnv)) {
+    require('dotenv').config({ path: devEnv });
+    return;
+  }
+  const userEnv = path.join(app.getPath('userData'), '.env');
+  if (!fs.existsSync(userEnv)) {
+    try {
+      fs.mkdirSync(path.dirname(userEnv), { recursive: true });
+      fs.writeFileSync(
+        userEnv,
+        [
+          '# AI 圆桌配置（安装版）',
+          '# 飞书机器人凭证（可选）：不填则飞书入口不可用，桌面端与本地 HTTP 接口照常',
+          '# FEISHU_APP_ID=cli_xxxxxxxx',
+          '# FEISHU_APP_SECRET=xxxxxxxx',
+          '# 会话白名单（可选，逗号分隔 chat_id；群消息还需 @机器人）',
+          '# FEISHU_ALLOW_CHAT_IDS=',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
+    } catch {}
+  }
+  require('dotenv').config({ path: userEnv });
+})();
 const { createFeishuBridge } = require('./feishu');
 const history = require('./history');
 
@@ -59,6 +87,11 @@ function createTray() {
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// GPU 禁用与 X11 ozone 在代码里固定（不依赖启动参数）：菜单图标、systemd 服务、
+// 命令行任何方式启动行为一致。本机（统信 UOS arm64）实测 GPU 进程反复崩溃
+// （2026-08-18 曾 FATAL 退出），且 Wayland 会话下 webview 渲染异常。
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('ozone-platform', 'x11');
 
 // ===== 服务编排：飞书桥接 + 本地 HTTP 接口（供 Hermes skill 调用）=====
 const http = require('http');

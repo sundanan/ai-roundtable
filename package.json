@@ -1,10 +1,11 @@
 {
   "name": "ai-roundtable",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "AI 圆桌：一个输入框，把问题同时发给 8 个 AI 网页版（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心），收集回复并自动汇总",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron . --disable-gpu --ozone-platform=x11"
+    "start": "electron . --disable-gpu --ozone-platform=x11",
+    "dist:deb": "electron-builder --linux deb"
   },
   "keywords": [
     "ai",
@@ -13,13 +14,57 @@
     "multi-model",
     "ensemble"
   ],
-  "author": "",
+  "author": "sundanan <sundanan@users.noreply.github.com>",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.72.0",
     "dotenv": "^17.4.2"
+  },
+  "build": {
+    "appId": "com.sundanan.ai-roundtable",
+    "productName": "ai-roundtable",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "extraResources": [
+      { "from": "service.sh", "to": "." },
+      { "from": "scripts/setup-autostart.sh", "to": "." }
+    ],
+    "linux": {
+      "icon": "assets/icon.png",
+      "category": "Utility",
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "AI 圆桌",
+          "Name[zh_CN]": "AI 圆桌",
+          "Comment": "一个问题同时问 8 家 AI，自动汇总五段结构总结",
+          "StartupWMClass": "ai-roundtable"
+        }
+      }
+    },
+    "deb": {
+      "artifactName": "${name}_${version}_${arch}.${ext}",
+      "recommends": [
+        "pandoc"
+      ]
+    }
   }
 }

@@ -23,4 +23,16 @@ if [ -z "$DISPLAY" ]; then
 fi
 
 echo "===== AI圆桌服务启动 $(date '+%F %T') =====" >> "$LOG"
-exec ./node_modules/electron/dist/electron . --disable-gpu --ozone-platform=x11 >> "$LOG" 2>&1
+# 位置自适应：
+# - 开发版：本脚本在仓库根（electron 在 node_modules 里，应用根为当前目录 "."）
+# - 安装版（deb）：本脚本在 /opt/ai-roundtable/resources/ 下，二进制在上一级
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "$SELF_DIR/node_modules/electron/dist/electron" ]; then
+  cd "$SELF_DIR" || exit 1
+  exec ./node_modules/electron/dist/electron . --disable-gpu --ozone-platform=x11 >> "$LOG" 2>&1
+elif [ -x "$SELF_DIR/../ai-roundtable" ]; then
+  exec "$SELF_DIR/../ai-roundtable" --disable-gpu --ozone-platform=x11 >> "$LOG" 2>&1
+else
+  echo "未找到 electron 可执行文件（$SELF_DIR 下既无 node_modules/electron，上一级也无 ai-roundtable）" >> "$LOG"
+  exit 1
+fi
