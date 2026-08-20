@@ -87,11 +87,13 @@ function createTray() {
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-// GPU 禁用与 X11 ozone 在代码里固定（不依赖启动参数）：菜单图标、systemd 服务、
-// 命令行任何方式启动行为一致。本机（统信 UOS arm64）实测 GPU 进程反复崩溃
-// （2026-08-18 曾 FATAL 退出），且 Wayland 会话下 webview 渲染异常。
-app.disableHardwareAcceleration();
-app.commandLine.appendSwitch('ozone-platform', 'x11');
+// GPU 禁用与 X11 ozone 仅 Linux：本机（统信 UOS arm64）实测 GPU 进程反复崩溃
+// （2026-08-18 曾 FATAL 退出），且 Wayland 会话下 webview 渲染异常，统一禁用硬件
+// 加速并固定 X11。macOS 上不能设 ozone-platform=x11（无 X11 后端会崩）、GPU 也无需禁用。
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('ozone-platform', 'x11');
+}
 
 // ===== 服务编排：飞书桥接 + 本地 HTTP 接口（供 Hermes skill 调用）=====
 const http = require('http');
