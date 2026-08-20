@@ -58,7 +58,30 @@
           "Comment": "一个问题同时问 8 家 AI，自动汇总五段结构总结",
           "StartupWMClass": "ai-roundtable"
         }
-      }
+      },
+      "extraResources": [
+        { "from": "service.sh", "to": "." },
+        { "from": "scripts/setup-autostart.sh", "to": "." }
+      ]
+    },
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        { "from": "scripts/setup-autostart-windows.bat", "to": "." }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "shortcutName": "AI 圆桌",
+      "artifactName": "${name}-Setup-${version}-x64.${ext}"
     },
     "deb": {
       "artifactName": "${name}_${version}_${arch}.${ext}",

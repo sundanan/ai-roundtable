@@ -94,6 +94,11 @@ if (process.platform === 'linux') {
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('ozone-platform', 'x11');
 }
+// Windows：Chromium 的原生窗口遮挡检测会把隐藏到托盘的窗口判定为"遮挡"并暂停
+// 渲染，托盘常驻期间飞书/HTTP 触发的轮次会停摆（Electron on Windows 已知问题）。
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+}
 
 // ===== 服务编排：飞书桥接 + 本地 HTTP 接口（供 Hermes skill 调用）=====
 const http = require('http');
