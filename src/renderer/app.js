@@ -65,9 +65,8 @@ for (const adapter of ADAPTERS) {
   panelEl.appendChild(webview);
   dock.appendChild(panelEl);
 
-  // 第二层按钮：品牌徽章 + 名称。单击=切换是否参与本轮；双击=全屏打开该网页。
-  // 双击不用原生 dblclick（对慢双击不敏感），手动判定：400ms 内第二次点击算双击；
-  // 单击延时 400ms 生效，双击则取消这次切换、直接全屏打开
+  // 第二层按钮：品牌徽章 + 名称。单击=全屏打开该网页（手动登录/查看/补发）；
+  // 是否参与本轮提问在「设置」里勾选，按钮明暗仅作参与状态展示
   const barBtn = document.createElement('div');
   barBtn.className = 'model-btn checked';
   barBtn.innerHTML =
@@ -76,24 +75,10 @@ for (const adapter of ADAPTERS) {
     `<span class="model-status"></span>`;
   barBtn.querySelector('.model-badge').style.background =
     BRAND_COLORS[adapter.id] || 'var(--accent)';
-  let clickTimer = null;
-  barBtn.addEventListener('click', () => {
-    if (clickTimer) {
-      clearTimeout(clickTimer);
-      clickTimer = null;
-      focusPanel(adapter.id);
-      return;
-    }
-    clickTimer = setTimeout(() => {
-      clickTimer = null;
-      barBtn.classList.toggle('checked');
-      barBtn.classList.toggle('unchecked', !barBtn.classList.contains('checked'));
-      updateSubsetCount();
-    }, 400);
-  });
+  barBtn.addEventListener('click', () => focusPanel(adapter.id));
   modelGrid.appendChild(barBtn);
 
-  // 第三层回复行（点击不展开，跳转总结版块对应该家的附录锚点）
+  // 第三层回复行（行内始终显示回复预览；点击跳转总结版块对应该家的附录锚点）
   const row = document.createElement('div');
   row.className = 'row';
   row.innerHTML = `
@@ -123,6 +108,7 @@ for (const adapter of ADAPTERS) {
     statusDot: barBtn.querySelector('.model-status'),
     statusEl: panelEl.querySelector('.panel-status'),
     rowStateEl: row.querySelector('.row-state'),
+    rowResendBtn: row.querySelector('.row-resend'),
     rowBodyEl: row.querySelector('.row-body'),
     state: 'idle',
     lastText: '',
@@ -195,19 +181,36 @@ const DOT_LABELS = {
 
 function setDots(p, state) {
   p.dot.className = 'dot' + (state ? ` ${state}` : '');
-  // 网页状态用按钮右上角小圆点表达（绿=就绪/橙=加载/红=失败），边框只表达选中态
+  // 网页状态用按钮右上角小圆点表达（绿=就绪/橙=加载/红=失败），边框/明暗只表达是否参与本轮
   p.statusDot.className = 'model-status' + (state ? ` ${state}` : '');
   const label = DOT_LABELS[state] || state || '';
   p.statusDot.title = `${p.adapter.name}：${label || '未加载'}`;
   p.barBtn.title =
-    `${p.adapter.name}${label ? `：${label}` : ''} · 单击切换选中，双击全屏打开`;
+    `${p.adapter.name}${label ? `：${label}` : ''} · 单击全屏打开；参与选择在「设置」`;
 }
 
-// 已选 N/总数 计数
+// 本轮参与选择：持久化在 localStorage（设置弹窗勾选；缺省=全部）
+function getSelectedIds() {
+  try {
+    const v = JSON.parse(localStorage.getItem('rt_selected') || 'null');
+    if (Array.isArray(v)) return v.filter((id) => panels.has(id));
+  } catch {}
+  return [...panels.keys()];
+}
+
+// 把存储的选择应用到模型按钮（选中=亮，未选=暗）并刷新计数
+function applySelection() {
+  const sel = new Set(getSelectedIds());
+  for (const p of panels.values()) {
+    p.barBtn.classList.toggle('checked', sel.has(p.adapter.id));
+    p.barBtn.classList.toggle('unchecked', !sel.has(p.adapter.id));
+  }
+  updateSubsetCount();
+}
+
+// 已选 N/总数 计数（点击打开「设置」调整参与各家）
 function updateSubsetCount() {
-  const btns = modelGrid.querySelectorAll('.model-btn');
-  const n = [...btns].filter((b) => b.classList.contains('checked')).length;
-  subsetCountEl.textContent = `已选 ${n}/${btns.length}`;
+  subsetCountEl.textContent = `已选 ${getSelectedIds().length}/${panels.size}`;
 }
 
 function setStatus(el, text) {
@@ -215,9 +218,15 @@ function setStatus(el, text) {
   el.title = text || '';
 }
 
+// 状态胶囊：只放短状态，引导语放 tooltip；失败时整行红边 + 重发按钮放大为「↻ 重发」
 function setCardState(p, text, cls) {
   p.rowStateEl.textContent = text;
   p.rowStateEl.className = 'row-state' + (cls ? ` ${cls}` : '');
+  p.rowStateEl.title = text;
+  const failed = cls === 'err';
+  p.row.classList.toggle('failed', failed);
+  p.rowResendBtn.classList.toggle('urgent', failed);
+  p.rowResendBtn.textContent = failed ? '↻ 重发' : '↻';
 }
 
 // ================= 注入脚本（在 webview 内执行） =================
@@ -550,8 +559,14 @@ const NOISE_LABELS = new Set([
   '复制', '重新生成', '展开', '收起', '查看更多', '加载更多',
 ]);
 
-// 清洗抓到的回复：截断「猜你想问」类推荐区块，去掉尾部按钮文字（编辑/复制/分享…）
-function cleanReply(text) {
+// 归一化（与抓取脚本同规则）：去空白与标点，用于比对"问题回音"
+const normText = (s) =>
+  String(s).replace(/[\s\u00a0\u200b]+/g, '').replace(/[\p{P}\p{S}]/gu, '');
+
+// 清洗抓到的回复：截断「猜你想问」类推荐区块，去掉尾部按钮文字（编辑/复制/分享…）；
+// 传入 question 时额外剔除首行的"问题回音"（千问等会把问题复述成第一行再接正文，
+// 节点级排除兜不住这种"回音独立成行"的情况，曾混进总结附录）
+function cleanReply(text, question) {
   const CUT_MARKERS = /^(你可能想问|猜你想问|相关问题|相关视频|为你推荐|推荐问题|推荐追问|继续提问|继续追问)/;
   const TRAIL = /^(编辑|复制|分享|重新生成|收藏|朗读|听全文|点赞|点踩|举报|转发|反馈|引用|追问|换个话题)$/;
   const lines = String(text || '').split('\n');
@@ -562,7 +577,21 @@ function cleanReply(text) {
     lines.pop();
   }
   const out = lines.join('\n').trim();
-  return NOISE_LABELS.has(out) ? '' : out;
+  if (NOISE_LABELS.has(out)) return '';
+  if (question) {
+    const nq = normText(question);
+    if (nq) {
+      const ls = out.split('\n');
+      while (ls.length) {
+        const nl = normText(ls[0]);
+        // 首行与问题相同、或为问题的开头一段（回音可能被换行截断），剔除
+        if (nl && nl.length >= 4 && (nl === nq || nq.startsWith(nl))) ls.shift();
+        else break;
+      }
+      return ls.join('\n').trim();
+    }
+  }
+  return out;
 }
 
 // ================= 执行通道 =================
@@ -799,9 +828,12 @@ function submit() {
   const text = promptEl.value.trim();
   if (!text) return;
   // 发送后保留输入文本（便于对照/改问再发）；清空请用「新问题」按钮
-  const selected = [...modelGrid.querySelectorAll('.model-btn.checked .model-name')]
-    .map((t) => t.dataset.id);
-  broadcast(text, selected.length ? selected : undefined);
+  const selected = getSelectedIds();
+  if (!selected.length) {
+    progressText.textContent = '未选择参与家，请在「设置」里勾选';
+    return;
+  }
+  broadcast(text, selected);
 }
 
 sendBtn.addEventListener('click', submit);
@@ -811,9 +843,27 @@ document.getElementById('new-btn').addEventListener('click', () => {
   autoGrow();
   promptEl.focus();
 });
-// Enter 换行，Ctrl+Enter 发送
+
+// 发送快捷键：默认 Ctrl+Enter 发送（Enter 换行）；设置里可切换为 Enter 发送（Shift+Enter 换行）
+function getEnterSend() {
+  return localStorage.getItem('rt_enterSend') === '1';
+}
+
+function syncPromptPlaceholder() {
+  promptEl.placeholder = getEnterSend()
+    ? '输入问题，Enter 发送到勾选各家（Shift+Enter 换行）'
+    : '输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）';
+}
+
 promptEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  if (getEnterSend()) {
+    // Enter 发送模式：Shift/Ctrl/Meta+Enter 换行
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      submit();
+    }
+  } else if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
     submit();
   }
@@ -857,7 +907,7 @@ async function pollOnce() {
       updateProgress();
       return;
     }
-    const text = cleanReply(res.text);
+    const text = cleanReply(res.text, currentQuestion);
     if (!text) return;
     // 陈旧检测：抓到的仍是发送前的旧回复 → 本轮新回复还没到，绝不能判完成
     if (p.baselineText && text === p.baselineText) {
@@ -869,7 +919,8 @@ async function pollOnce() {
       if (p.staleCount >= staleMax && p.state !== 'error') {
         p.state = 'error';
         setStatus(p.statusEl, '未取到本轮回复');
-        setCardState(p, '未取到本轮回复（可手动补发）', 'err');
+        setCardState(p, '未取到回复', 'err');
+        p.rowStateEl.title = '未取到本轮回复，可点右侧「↻ 重发」';
       }
       updateProgress();
       return;
@@ -899,10 +950,11 @@ async function pollOnce() {
       p.reply = text;
       p.genStart = null;
       setStatus(p.statusEl, '已完成');
-      setCardState(p, '已完成 ✓（点击跳转总结原文）', 'ok');
-      // 完成态做 Markdown 渲染（表格/列表等），流式中途仍按纯文本显示
-      p.rowBodyEl.className = 'row-body md';
-      p.rowBodyEl.innerHTML = renderMarkdown(text);
+      setCardState(p, '已完成 ✓', 'ok');
+      p.rowStateEl.title = '点击跳转总结原文';
+      // 预览固定一行纯文本（首行 + 省略号）；全文点行跳转总结附录查看
+      p.rowBodyEl.className = 'row-body';
+      p.rowBodyEl.textContent = text;
     }
     updateProgress();
   });
@@ -910,15 +962,17 @@ async function pollOnce() {
 }
 
 // 生成等待计时（问题3）：让"慢"可见——生成中每秒刷新已等待秒数；
-// 超过 90s 变红并提示可双击上方按钮全屏查看，避免用户误判卡死
+// 超过 90s 提示"仍在生成"（tooltip 给出全屏查看入口），避免用户误判卡死
 setInterval(() => {
   for (const p of panels.values()) {
     if (p.state !== 'generating' || !p.genStart) continue;
     const s = Math.floor((Date.now() - p.genStart) / 1000);
     if (s >= 90) {
-      setCardState(p, `仍在生成（已 ${s}s），可双击上方按钮全屏查看`, 'err');
+      setCardState(p, `仍在生成 ${s}s`, 'warn');
+      p.rowStateEl.title = '生成较慢，可单击上方模型按钮全屏查看';
     } else {
       setCardState(p, `生成中… ${s}s`, 'warn');
+      p.rowStateEl.title = '正在生成回复';
     }
   }
 }, 1000);
@@ -993,7 +1047,7 @@ const summaryAnchors = new Map();
 // 目录 scroll-spy 锚点序列（文档顺序）：{ el, chip }
 let tocAnchors = [];
 
-// 左侧家名行点击：不展开，跳转总结版块对应附录锚点并短暂高亮目录标签；
+// 左侧家名行点击：跳转总结版块对应附录锚点并短暂高亮目录标签；
 // 尚无总结时在行状态上给出提示，避免"点了没反应"的错觉
 function jumpToSummaryFamily(name) {
   const a = summaryAnchors.get(name);
@@ -1002,10 +1056,13 @@ function jumpToSummaryFamily(name) {
     if (!p) return;
     const prevText = p.rowStateEl.textContent;
     const prevCls = p.rowStateEl.className;
-    setCardState(p, '尚未生成总结，先点右上角「总结」', 'warn');
+    const prevTitle = p.rowStateEl.title;
+    setCardState(p, '尚无总结', 'warn');
+    p.rowStateEl.title = '尚未生成总结，先点右上角「总结」';
     setTimeout(() => {
       p.rowStateEl.textContent = prevText;
       p.rowStateEl.className = prevCls;
+      p.rowStateEl.title = prevTitle;
     }, 1500);
     return;
   }
@@ -1115,6 +1172,9 @@ function buildSummaryToc() {
       setExpanded(subBox.hidden);
       if (appendixEl) appendixEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+
+    // 附录锚点本身也进 scroll-spy 序列：滚动到附录时高亮「各家意见」分组标签
+    if (appendixEl) tocAnchors.push({ el: appendixEl, chip: groupChip });
 
     for (const f of families) {
       const ad = ADAPTERS.find((a) => a.name === f.label);
@@ -1692,10 +1752,31 @@ const cfgBaseURL = document.getElementById('cfg-baseurl');
 const cfgApiKey = document.getElementById('cfg-apikey');
 const cfgModel = document.getElementById('cfg-model');
 const cfgAutoSummary = document.getElementById('cfg-autosummary');
+const cfgModelsEl = document.getElementById('cfg-models');
+const cfgEnterCtrl = document.getElementById('cfg-enter-ctrl');
+const cfgEnterEnter = document.getElementById('cfg-enter-enter');
 
-// 网页总结选中时，API 配置区整体置灰（保留为备选，不隐藏）
+// 参与各家勾选区：按适配器动态生成（品牌色点 + 名称），状态在 openSettings 时回填
+for (const a of ADAPTERS) {
+  const label = document.createElement('label');
+  label.className = 'cfg-check cfg-model';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.dataset.id = a.id;
+  const dot = document.createElement('span');
+  dot.className = 'cfg-dot';
+  dot.style.background = BRAND_COLORS[a.id] || 'var(--accent)';
+  label.appendChild(cb);
+  label.appendChild(dot);
+  label.appendChild(document.createTextNode(a.name));
+  cfgModelsEl.appendChild(label);
+}
+
+// 网页总结选中时，API 配置区整体置灰并禁用输入（保留为备选，不隐藏）
 function syncSummaryModeUI() {
-  cfgApiFields.classList.toggle('cfg-api-off', cfgModeWeb.checked);
+  const off = cfgModeWeb.checked;
+  cfgApiFields.classList.toggle('cfg-api-off', off);
+  for (const el of [cfgBaseURL, cfgApiKey, cfgModel]) el.disabled = off;
 }
 
 function openSettings() {
@@ -1707,32 +1788,54 @@ function openSettings() {
   cfgApiKey.value = s.apiKey;
   cfgModel.value = s.model;
   cfgAutoSummary.checked = getAutoSummary();
+  // 参与各家 + 发送快捷键回填
+  const sel = new Set(getSelectedIds());
+  for (const cb of cfgModelsEl.querySelectorAll('input[type="checkbox"]')) {
+    cb.checked = sel.has(cb.dataset.id);
+  }
+  cfgEnterCtrl.checked = !getEnterSend();
+  cfgEnterEnter.checked = getEnterSend();
   modal.hidden = false;
 }
 
 document.getElementById('settings-btn').addEventListener('click', openSettings);
+// 「已选 N/8」计数本身就是设置入口
+subsetCountEl.title = '点击打开「设置」调整参与各家';
+subsetCountEl.addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', () => (modal.hidden = true));
 document.getElementById('cfg-cancel').addEventListener('click', () => (modal.hidden = true));
 cfgModeWeb.addEventListener('change', syncSummaryModeUI);
 cfgModeApi.addEventListener('change', syncSummaryModeUI);
+document.getElementById('cfg-sel-all').addEventListener('click', () => {
+  for (const cb of cfgModelsEl.querySelectorAll('input[type="checkbox"]')) cb.checked = true;
+});
+document.getElementById('cfg-sel-none').addEventListener('click', () => {
+  for (const cb of cfgModelsEl.querySelectorAll('input[type="checkbox"]')) cb.checked = false;
+});
 document.getElementById('cfg-save').addEventListener('click', () => {
   localStorage.setItem('rt_summaryMode', cfgModeApi.checked ? 'api' : 'web');
   localStorage.setItem('rt_baseURL', cfgBaseURL.value.trim());
   localStorage.setItem('rt_apiKey', cfgApiKey.value.trim());
   localStorage.setItem('rt_model', cfgModel.value.trim());
   localStorage.setItem('rt_autoSummary', cfgAutoSummary.checked ? '1' : '0');
+  const ids = [...cfgModelsEl.querySelectorAll('input[type="checkbox"]')]
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.dataset.id);
+  localStorage.setItem('rt_selected', JSON.stringify(ids));
+  localStorage.setItem('rt_enterSend', cfgEnterEnter.checked ? '1' : '0');
+  applySelection();
+  syncPromptPlaceholder();
   modal.hidden = true;
 });
 modal.addEventListener('click', (e) => {
   if (e.target === modal) modal.hidden = true;
 });
 
-// ================= 历史记录弹窗 =================
+// ================= 历史记录弹窗（左列表右详情） =================
 const historyModal = document.getElementById('history-modal');
 const historyList = document.getElementById('history-list');
 const historyDetail = document.getElementById('history-detail');
 const historySearch = document.getElementById('history-search');
-const historyBackBtn = document.getElementById('history-back');
 
 function fmtTs(ts) {
   try {
@@ -1743,9 +1846,6 @@ function fmtTs(ts) {
 }
 
 async function loadHistoryList() {
-  historyList.hidden = false;
-  historyDetail.hidden = true;
-  historyBackBtn.hidden = true;
   historyList.innerHTML = '<div class="history-empty">加载中…</div>';
   let items = [];
   try {
@@ -1773,10 +1873,8 @@ async function loadHistoryList() {
   }
 }
 
+// 点击左侧条目，在右侧详情区展示（列表保持可见，可连续翻看）
 function showHistoryDetail(it) {
-  historyList.hidden = true;
-  historyDetail.hidden = false;
-  historyBackBtn.hidden = false;
   let html = `<div class="hd-q"></div><div class="history-meta">${fmtTs(it.ts)}</div>`;
   html += `<div class="hd-section">📋 总结</div><div class="hd-summary"></div>`;
   html += `<div class="hd-section">各家回复</div>`;
@@ -1784,6 +1882,7 @@ function showHistoryDetail(it) {
     html += `<div class="hd-reply"><div class="hd-reply-name"></div><div class="hd-reply-text"></div></div>`;
   }
   historyDetail.innerHTML = html;
+  historyDetail.scrollTop = 0;
   historyDetail.querySelector('.hd-q').textContent = it.question;
   const sumEl = historyDetail.querySelector('.hd-summary');
   // 总结与各家回复统一走 Markdown 渲染（问题8：标题/列表/表格不再平铺成纯文本）
@@ -1815,10 +1914,20 @@ function openHistory() {
 document.getElementById('history-btn').addEventListener('click', openHistory);
 document.getElementById('history-close').addEventListener('click', () => (historyModal.hidden = true));
 document.getElementById('history-close-x').addEventListener('click', () => (historyModal.hidden = true));
-historyBackBtn.addEventListener('click', loadHistoryList);
 document.getElementById('history-refresh').addEventListener('click', loadHistoryList);
+// 搜索：输入即时过滤（300ms 防抖），Enter 立即触发；× 一键清空搜索词
+let historySearchTimer = null;
+historySearch.addEventListener('input', () => {
+  clearTimeout(historySearchTimer);
+  historySearchTimer = setTimeout(loadHistoryList, 300);
+});
 historySearch.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') loadHistoryList();
+});
+document.getElementById('history-clear').addEventListener('click', () => {
+  historySearch.value = '';
+  loadHistoryList();
+  historySearch.focus();
 });
 historyModal.addEventListener('click', (e) => {
   if (e.target === historyModal) historyModal.hidden = true;
@@ -1860,3 +1969,45 @@ document.addEventListener('mouseup', () => {
     }
   }
 });
+
+// ================= 模型栏/输出区 横向拖拽分隔条 =================
+const hDivider = document.getElementById('h-divider');
+const modelBar = document.getElementById('model-bar');
+let hDividerDragging = false;
+let hDividerMoved = false;
+
+// 默认高度以上次拖到的为准（localStorage 持久化；首次为 CSS 自适应）
+try {
+  const savedH = parseInt(localStorage.getItem('rt_modelbar_h'), 10);
+  if (savedH >= 44 && savedH <= 240) modelBar.style.height = `${savedH}px`;
+} catch {}
+
+hDivider.addEventListener('mousedown', (e) => {
+  hDividerDragging = true;
+  hDividerMoved = false;
+  document.body.style.cursor = 'row-resize';
+  document.body.style.userSelect = 'none';
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!hDividerDragging) return;
+  const top = modelBar.getBoundingClientRect().top;
+  const h = Math.max(44, Math.min(240, e.clientY - top));
+  modelBar.style.height = `${h}px`;
+  hDividerMoved = true;
+});
+document.addEventListener('mouseup', () => {
+  if (!hDividerDragging) return;
+  hDividerDragging = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  // 只有真的拖动过才保存，避免误点分隔条把当前高度固化
+  if (!hDividerMoved) return;
+  try {
+    localStorage.setItem('rt_modelbar_h', String(parseInt(modelBar.style.height, 10) || ''));
+  } catch {}
+});
+
+// ================= 启动初始化：应用参与选择 + 输入框快捷键提示语 =================
+applySelection();
+syncPromptPlaceholder();

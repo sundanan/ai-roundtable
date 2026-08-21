@@ -23,13 +23,16 @@
     </div>
   </header>
 
-  <!-- 第二层：已选计数 + 各家按钮（单击切换选中，双击全屏打开） -->
+  <!-- 第二层：已选计数（点击进设置调整参与各家）+ 各家按钮（单击全屏打开） -->
   <nav id="model-bar">
     <div class="subset-ctrl">
       <span id="subset-count" class="subset-count">已选 8/8</span>
     </div>
     <div id="model-grid"></div>
   </nav>
+
+  <!-- 模型栏与输出区之间的横向分隔条（拖拽调整模型栏高度） -->
+  <div id="h-divider" title="拖拽调整模型栏高度"></div>
 
   <!-- 第三层：输出层（左：各家回复；右：LLM 总结） -->
   <main id="output">
@@ -50,10 +53,43 @@
           </span>
           <span id="summary-status" class="card-state"></span>
         </div>
-        <!-- 目录标签：总结生成后由 JS 填充，纵向排列在内容左侧（五部分 + 附录各家，点击平滑跳转） -->
+        <!-- 目录标签：空态显示静态五段预览（灰化不可点）；总结生成后由 JS 替换为可跳转标签 -->
         <div class="summary-main">
-          <div id="summary-toc" class="summary-toc" hidden></div>
-          <div id="summary-body" class="summary-body md placeholder">各家回答完毕后，点击「总结」。</div>
+          <div id="summary-toc" class="summary-toc">
+            <span class="toc-chip toc-static">主要共识</span>
+            <span class="toc-chip toc-static">次要共识</span>
+            <span class="toc-chip toc-static">分歧观点</span>
+            <span class="toc-chip toc-static">个性观点</span>
+            <span class="toc-chip toc-static">综合意见</span>
+            <span class="toc-sep"></span>
+            <span class="toc-chip toc-static">各家意见</span>
+          </div>
+          <!-- 空态：骨架屏式五段结构预览，总结生成后由 JS 整体替换 -->
+          <div id="summary-body" class="summary-body md placeholder">
+            <div class="skel-sec">
+              <div class="skel-title">一、主要共识</div>
+              <div class="skel-bar"></div>
+              <div class="skel-bar w80"></div>
+            </div>
+            <div class="skel-sec">
+              <div class="skel-title">二、次要共识</div>
+              <div class="skel-bar w80"></div>
+            </div>
+            <div class="skel-sec">
+              <div class="skel-title">三、分歧观点</div>
+              <div class="skel-bar w60"></div>
+            </div>
+            <div class="skel-sec">
+              <div class="skel-title">四、个性观点</div>
+              <div class="skel-bar w80"></div>
+            </div>
+            <div class="skel-sec">
+              <div class="skel-title">五、综合意见</div>
+              <div class="skel-bar"></div>
+              <div class="skel-bar w60"></div>
+            </div>
+            <div class="skel-hint">各家回答完毕后，点击「总结」生成五段圆桌总结</div>
+          </div>
         </div>
       </div>
     </div>
@@ -62,36 +98,64 @@
   <!-- 各家 webview 面板：平时驻留在屏外 dock，点击按钮后切为全屏浮层 -->
   <div id="dock"></div>
 
-  <!-- 设置弹窗 -->
+  <!-- 设置弹窗：左右双栏，一屏放下、无滚动条 -->
   <div id="settings-modal" class="modal-mask" hidden>
     <div class="modal">
       <button class="modal-close" id="settings-close" title="关闭">✕</button>
-      <h2>总结设置</h2>
-      <div class="cfg-mode">
-        <label class="cfg-check">
-          <input type="radio" name="cfg-summary-mode" id="cfg-mode-web" checked>
-          网页总结 · DeepSeek 第二账号（免费；首次使用点「总结」后在全屏页面手动登录）
-        </label>
-        <label class="cfg-check">
-          <input type="radio" name="cfg-summary-mode" id="cfg-mode-api">
-          API 总结 · OpenAI 兼容接口（备选）
-        </label>
+      <h2>设置</h2>
+      <div class="cfg-cols">
+        <div class="cfg-col">
+          <div class="cfg-section-title">总结方式</div>
+          <div class="cfg-mode">
+            <label class="cfg-check">
+              <input type="radio" name="cfg-summary-mode" id="cfg-mode-web" checked>
+              网页总结 · DeepSeek 第二账号（免费，免 API Key）
+            </label>
+            <label class="cfg-check">
+              <input type="radio" name="cfg-summary-mode" id="cfg-mode-api">
+              API 总结 · OpenAI 兼容接口（备选）
+            </label>
+          </div>
+          <div id="cfg-api-fields">
+            <label>Base URL
+              <input id="cfg-baseurl" type="text" placeholder="https://api.deepseek.com/v1">
+            </label>
+            <label>API Key
+              <input id="cfg-apikey" type="password" placeholder="sk-...">
+            </label>
+            <label>模型名
+              <input id="cfg-model" type="text" placeholder="deepseek-chat">
+            </label>
+          </div>
+          <label class="cfg-check">
+            <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结（桌面端）
+          </label>
+          <p class="modal-tip">网页总结首次使用需在全屏页面手动登录第二个 DeepSeek 账号；API 配置仅保存在本机（localStorage）。</p>
+        </div>
+        <div class="cfg-col">
+          <div class="cfg-section-title">
+            <span>参与各家（模型按钮单击=全屏打开）</span>
+            <span class="cfg-mini-actions">
+              <button id="cfg-sel-all" class="mini">全选</button>
+              <button id="cfg-sel-none" class="mini">清空</button>
+            </span>
+          </div>
+          <div id="cfg-models" class="cfg-models"></div>
+          <div class="cfg-section">
+            <div class="cfg-section-title">发送快捷键</div>
+            <div class="cfg-mode">
+              <label class="cfg-check">
+                <input type="radio" name="cfg-enter" id="cfg-enter-ctrl" checked>
+                Ctrl+Enter 发送（Enter 换行）
+              </label>
+              <label class="cfg-check">
+                <input type="radio" name="cfg-enter" id="cfg-enter-enter">
+                Enter 发送（Shift+Enter 换行）
+              </label>
+            </div>
+          </div>
+        </div>
       </div>
-      <div id="cfg-api-fields">
-        <label>Base URL
-          <input id="cfg-baseurl" type="text" placeholder="https://api.deepseek.com/v1">
-        </label>
-        <label>API Key
-          <input id="cfg-apikey" type="password" placeholder="sk-...">
-        </label>
-        <label>模型名
-          <input id="cfg-model" type="text" placeholder="deepseek-chat">
-        </label>
-      </div>
-      <label class="cfg-check">
-        <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结（桌面端）
-      </label>
-      <p class="modal-tip">网页总结复用浏览器里手动登录的 DeepSeek 账号，无需 API Key；API 配置仅保存在本机（localStorage）。</p>
       <div class="modal-actions">
         <button id="cfg-save" class="primary">保存</button>
         <button id="cfg-cancel">取消</button>
@@ -99,19 +163,25 @@
     </div>
   </div>
 
-  <!-- 历史记录弹窗 -->
+  <!-- 历史记录弹窗：左列表右详情 -->
   <div id="history-modal" class="modal-mask" hidden>
     <div class="modal modal-wide">
       <button class="modal-close" id="history-close-x" title="关闭">✕</button>
       <h2>历史记录</h2>
-      <div class="history-toolbar">
-        <input id="history-search" type="text" placeholder="按问题关键词过滤…">
-        <button id="history-refresh" class="icon-btn" title="刷新">⟳</button>
+      <div class="history-cols">
+        <div class="history-left">
+          <div class="history-toolbar">
+            <input id="history-search" type="text" placeholder="按问题关键词过滤…">
+            <button id="history-clear" class="icon-btn" title="清空搜索词">×</button>
+            <button id="history-refresh" class="icon-btn" title="刷新">⟳</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </div>
+        <div id="history-detail" class="history-detail">
+          <div class="history-empty">选择左侧记录查看详情</div>
+        </div>
       </div>
-      <div id="history-list" class="history-list"></div>
-      <div id="history-detail" class="history-detail" hidden></div>
       <div class="modal-actions">
-        <button id="history-back" hidden>← 返回列表</button>
         <button id="history-close">关闭</button>
       </div>
     </div>

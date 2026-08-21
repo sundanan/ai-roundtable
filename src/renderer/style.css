@@ -35,7 +35,7 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
@@ -53,11 +53,11 @@ body {
   min-width: 0;
 }
 
-/* 输入框：固定外显 3 行（14px × 1.5 × 3 + 上下 padding），超出内部滚动/自动增高 */
+/* 输入框：固定外显 2 行（14px × 1.5 × 2 + 上下 padding），超出内部滚动/自动增高 */
 #prompt {
   flex: 1;
   resize: none;
-  min-height: 81px;
+  height: 54px; /* 外显 2 行；必须用 height 而非 min-height——placeholder 换行会撑大 auto 高度 */
   max-height: 180px;
   padding: 9px 12px;
   border: 1px solid var(--border);
@@ -74,7 +74,8 @@ body {
 #new-btn {
   align-self: stretch;        /* 与输入框等高，整条竖带都可点 */
   flex: 0 0 auto;
-  width: 17px;                /* 约为此前 34px 的一半，输入框随之整体左移 */
+  width: 30px;                /* 约一指的点击宽度（曾用 17px，过窄难点） */
+  margin: 0 -6px;             /* 抵消 composer 间隙，让 ＋ 贴近窗口左缘与输入框 */
   padding: 0;
   display: flex;
   align-items: center;
@@ -94,11 +95,11 @@ body {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
 }
 .composer-actions button {
-  padding: 4px 20px;
+  padding: 3px 20px;
   white-space: nowrap;
 }
 #send-btn { grid-row: 1 / 3; grid-column: 1; font-weight: 600; }
@@ -134,12 +135,12 @@ button.icon-text-btn { padding: 9px 14px; }
 /* ---------- 第二层：子集控制 + 各家按钮 ---------- */
 #model-bar {
   display: flex;
-  align-items: center;
+  align-items: stretch; /* 高度可被横向分隔条拖大，按钮随之撑满 */
   gap: 10px;
-  padding: 8px 14px;
+  padding: 5px 14px;
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
+  overflow: hidden;
 }
 
 /* 优化1：子集控制区 */
@@ -156,7 +157,9 @@ button.icon-text-btn { padding: 9px 14px; }
   color: var(--text-dim);
   white-space: nowrap;
   min-width: 56px;
+  cursor: pointer; /* 点击打开「设置」调整参与各家 */
 }
+.subset-count:hover { color: var(--accent); }
 
 #model-grid {
   display: grid;
@@ -166,14 +169,14 @@ button.icon-text-btn { padding: 9px 14px; }
   min-width: 0;
 }
 
-/* 模型按钮：品牌徽章 + 名称。单击切换选中；双击全屏打开该网页 */
+/* 模型按钮：品牌徽章 + 名称。单击=全屏打开该网页；是否参与本轮在「设置」勾选 */
 .model-btn {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 12px 4px;
+  padding: 8px 4px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-panel);
@@ -242,7 +245,7 @@ button.icon-text-btn { padding: 9px 14px; }
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 10px 14px;
+  padding: 5px 14px;
 }
 
 /* 进度文字 + 进度条同行 */
@@ -250,7 +253,7 @@ button.icon-text-btn { padding: 9px 14px; }
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   flex: 0 0 auto;
 }
 #progress-text {
@@ -298,20 +301,31 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 #divider:hover { background: var(--accent); opacity: 0.5; }
 
-/* 左列：一行一家，行高等分容器；点击展开/收起 */
+/* 模型栏与输出区之间的横向可拖拽分隔条（调整模型栏高度） */
+#h-divider {
+  flex: 0 0 6px;
+  cursor: row-resize;
+  position: relative;
+  z-index: 1;                  /* 与主内容同层：透明背景会透出下层 dock 里的 webview */
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+#h-divider:hover { background: var(--accent); }
+
+/* 左列：一行一家，固定紧凑行高（家名行 + 1 行回复预览），8 家一屏放下、超出纵向滚动 */
 #rows {
   flex: 0 0 46%;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .row {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
@@ -327,19 +341,22 @@ button.icon-text-btn { padding: 9px 14px; }
   transform: translateY(-1px);
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
 }
-.row.expanded { flex: 4 1 0; }
+/* 失败行：整行红边常显（最需要行动的时刻要最显眼），hover 不再变蓝 */
+.row.failed,
+.row.failed:hover { border-color: var(--err); }
 
 .row-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 3px 12px;
   flex: 0 0 auto;
 }
 
 .row-name { font-weight: 600; }
 
-/* 状态胶囊：默认灰，发送中蓝、生成中橙、完成绿、失败红，一色一阶段 */
+/* 状态胶囊：默认灰，发送中蓝、生成中橙、完成绿、失败红，一色一阶段；
+   文字只保留短状态，操作引导放 tooltip */
 .row-state {
   margin-left: auto;
   flex: 0 0 auto;
@@ -355,23 +372,28 @@ button.icon-text-btn { padding: 9px 14px; }
 .row-state.warn { color: var(--warn); background: rgba(245, 179, 66, 0.12); }
 .row-state.err { color: var(--err); background: rgba(242, 109, 109, 0.12); }
 
-.row-caret { color: var(--text-dim); font-size: 11px; }
-.row.expanded .row-caret { transform: rotate(180deg); }
-
-/* 回复正文默认隐藏：点击家名行不再展开，改为跳转总结版块对应附录锚点 */
-.row:not(.expanded) { justify-content: center; }
-.row-body {
-  display: none;
-  flex: 1;
-  min-height: 0;
-  padding: 0 12px 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-y: auto;
+/* 单家重发：平时是小 ↻；失败时实心红「↻ 重发」放大显示 */
+.row-resend.urgent {
+  background: var(--err);
+  border-color: var(--err);
+  color: #fff;
+  padding: 3px 12px;
+  font-size: 12px;
 }
-.row.expanded .row-body { display: block; }
+
+.row-caret { color: var(--text-dim); font-size: 11px; }
+
+/* 回复预览：固定一行、溢出省略号，保持 8 行高度一致；全文点行跳转总结附录 */
+.row-body {
+  flex: 0 0 auto;
+  padding: 0 12px 3px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .row-body.placeholder { color: var(--text-dim); }
-.row-body.error { color: var(--err); white-space: normal; }
+.row-body.error { color: var(--err); }
 
 /* 右列：LLM 总结 */
 #summary-panel {
@@ -635,7 +657,10 @@ button.icon-text-btn { padding: 9px 14px; }
 
 .modal {
   position: relative;
-  width: 420px;
+  width: 740px;
+  max-width: 94vw;
+  max-height: calc(100vh - 60px); /* 兜底：矮窗口下可滚动，正常窗口一屏放下 */
+  overflow-y: auto;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -692,8 +717,21 @@ button.icon-text-btn { padding: 9px 14px; }
   margin-top: 8px;
 }
 
-/* ---------- 历史记录弹窗 ---------- */
-.modal-wide { width: 680px; max-width: 92vw; }
+/* ---------- 历史记录弹窗（左列表右详情） ---------- */
+.modal-wide { width: 920px; max-width: 94vw; }
+
+.history-cols {
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+}
+
+.history-left {
+  flex: 0 0 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 
 .history-toolbar {
   display: flex;
@@ -702,6 +740,7 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 .history-toolbar input {
   flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -713,7 +752,7 @@ button.icon-text-btn { padding: 9px 14px; }
 .history-toolbar input:focus { border-color: var(--accent); }
 
 .history-list {
-  max-height: 420px;
+  height: 480px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -732,9 +771,13 @@ button.icon-text-btn { padding: 9px 14px; }
 .history-empty { color: var(--text-dim); padding: 20px; text-align: center; }
 
 .history-detail {
-  max-height: 460px;
+  flex: 1;
+  min-width: 0;
+  height: 480px;
   overflow-y: auto;
   text-align: left;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
 }
 .hd-q { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
 .hd-section {
@@ -761,3 +804,86 @@ button.icon-text-btn { padding: 9px 14px; }
 #cfg-api-fields { transition: opacity 0.15s; }
 /* 选中网页总结时 API 配置区置灰（保留为备选，不隐藏） */
 #cfg-api-fields.cfg-api-off { opacity: 0.45; }
+
+/* ---------- 总结面板空态：骨架屏式五段结构预览 ---------- */
+.skel-sec { margin-bottom: 14px; }
+.skel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+}
+.skel-bar {
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(154, 163, 184, 0.14);
+  margin: 6px 0 6px 13px;
+  animation: rt-pulse 1.6s ease-in-out infinite;
+}
+.skel-bar.w60 { width: 60%; }
+.skel-bar.w80 { width: 80%; }
+.skel-hint {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ---------- 设置弹窗：参与各家 / 发送快捷键 分区 ---------- */
+.cfg-section {
+  margin: 14px 0 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.cfg-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.cfg-mini-actions { display: flex; gap: 6px; }
+.cfg-models {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 16px;
+  margin-bottom: 6px;
+}
+.modal label.cfg-model {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+.cfg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  display: inline-block;
+}
+
+/* ---------- 设置弹窗：左右双栏 ---------- */
+.cfg-cols {
+  display: flex;
+  gap: 22px;
+}
+.cfg-cols .cfg-col {
+  flex: 1;
+  min-width: 0;
+}
+#cfg-api-fields label { margin-bottom: 8px; }
+
+/* 目录静态占位标签（空态五段预览用）：灰化、不可点 */
+.toc-chip.toc-static { cursor: default; opacity: 0.55; }
+.toc-chip.toc-static:hover {
+  border-color: transparent;
+  color: var(--text-dim);
+  background: transparent;
+}
