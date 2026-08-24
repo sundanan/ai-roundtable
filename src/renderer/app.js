@@ -43,6 +43,7 @@ const BRAND_COLORS = {
   deepseek: '#4d6bfe',
   minimax: '#f0564f',
   wenxin: '#2932e1',
+  mimo: '#ff6900',
 };
 
 for (const adapter of ADAPTERS) {
@@ -421,9 +422,20 @@ function buildScrapeScript(adapter, question) {
     question: (question || '').trim(),
     watchStop: !!adapter.watchStop,
     pruneSelectors: adapter.pruneSelectors || [],
+    // strictResponse：只用适配器专属选择器，跳过通用兜底。
+    // 适用于「兜底选择器会误中首页元素」的站点：MiMo 首页示例问题按钮类名含 message，
+    // 发送阶段（页面重载回首页时轮询已在跑）兜底 [class*="message"] 误抓示例文本并
+    // 稳定 3 轮误判完成，真正回复被忽略（2026-08-23 实测三轮均如此）
+    strict: !!adapter.strictResponse,
   });
   return `(function () {
     var cfg = ${cfg};
+    // 风控/人机验证拦截：阿里系（_____tmd_____/punish）等站点检测到自动化后
+    // 弹出验证 iframe，回答被卡在 loading——立即上报，由轮询判错提示人工处理
+    // （2026-08-24 实测千问：会话已建、答案卡验证，旧逻辑空等 180s 才判超时）
+    var punishIframe = document.querySelector(
+      'iframe[src*="punish"], iframe[src*="_____tmd_____"], iframe[src*="captcha"], iframe[src*="verify"]');
+    if (punishIframe) return { ok: true, blocked: '站点风控验证' };
     var USER_BOX = '[class*="user" i], [class*="human" i], [class*="question" i], ' +
       '[class*="request" i], [data-testid*="user" i]';
     var PENDING = /^(正在|搜索中|思考中|生成中|加载中)|正在(搜索|思考|生成|联网|整理|执行)|请稍候|searching|thinking|需要补充|^用户(想|问|需要)/i;
@@ -446,7 +458,9 @@ function buildScrapeScript(adapter, question) {
       }
       return false;
     }
-    var sels = cfg.responseSelectors.concat(['[class*="markdown"]', '[class*="message"]']);
+    var sels = cfg.strict
+      ? cfg.responseSelectors
+      : cfg.responseSelectors.concat(['[class*="markdown"]', '[class*="message"]']);
     function collect(sel, skipUserBox) {
       var out = [];
       try {
@@ -693,6 +707,7 @@ let roundSettleHandled = false; // 本轮"全部到终态"收尾是否已做（�
 // 单家发送任务：重置会话 → 抓基线 → 发送（失败重试一次 → 标记的家刷新重发）→ 更新状态。
 // 广播与单家补发共用。
 async function runSendTask(p, text) {
+  p.lastActivityAt = Date.now(); // 活动看门狗起点：广播与 ↻ 单家补发共用此路径
   // 每轮开新会话：先回站点入口页再提问，避免上一轮问答留在模型上下文里
   // （2026-08-18 实测 deepseek 面板连续三轮进同一会话，回答互相污染、
   // 交叉验证失真；总结者面板一直是同样做法）。适配器可设 resetBeforeSend:false 退出。
@@ -877,6 +892,11 @@ promptEl.addEventListener('input', autoGrow);
 
 // ================= 轮询抓取回复 =================
 const POLL_INTERVAL = 3000;
+// 面板级活动看门狗：发送后持续这么久抓取毫无进展（既非 pending 也抓不到文本，
+// 如执行异常/返回空）→ 判错误。兜底"静默卡死"盲区——陈旧检测只覆盖"抓到与基线
+// 相同的旧文本"，抓空/异常会无限空转到轮次上限（2026-08-24 实测千问改版后
+// 420s 零回复且不判错，白白吃满整轮）。适配器可用 stallTimeout 覆盖。
+const PANEL_STALL_MS = 180000;
 let poller = null;
 
 function startPoller() {
@@ -887,13 +907,40 @@ function startPoller() {
 async function pollOnce() {
   const tasks = [...panels.values()].map(async (p) => {
     if (p.state === 'done' || p.state === 'idle') return;
+    // 活动看门狗：发送后长时间抓取毫无进展（执行超时/返回空，既非 pending 也无文本）
+    // → 判错误，不再静默空转到轮次上限。error 面板不查（保留"迟到回复复活"机会）。
+    if ((p.state === 'sending' || p.state === 'generating') && p.lastActivityAt) {
+      const stallMs = (p.adapter && p.adapter.stallTimeout) || PANEL_STALL_MS;
+      if (Date.now() - p.lastActivityAt > stallMs) {
+        p.state = 'error';
+        p.genStart = null;
+        setStatus(p.statusEl, '抓取超时（页面无进展）');
+        setCardState(p, '抓取超时', 'err');
+        p.rowBodyEl.className = 'row-body error';
+        p.rowBodyEl.textContent = '长时间未取到回复进展。可点行尾 ↻ 仅重发该家，或双击全屏手动查看。';
+        updateProgress();
+        return;
+      }
+    }
     let res;
     try {
       res = await execInPanel(p.webview, buildScrapeScript(p.adapter, currentQuestion));
     } catch {
-      return; // 超时下轮再试
+      return; // 超时下轮再试（不计活动，累计无进展由看门狗兜底）
     }
-    if (!res || !res.ok) return;
+    if (!res || !res.ok) return; // 抓空不计活动，同上
+    p.lastActivityAt = Date.now(); // 有进展（pending 或抓到内容）：刷新看门狗
+    // 站点风控/人机验证拦截：立即判错并提示人工处理，不再空等
+    if (res.blocked) {
+      p.state = 'error';
+      p.genStart = null;
+      setStatus(p.statusEl, res.blocked + '（需人工）');
+      setCardState(p, res.blocked, 'err');
+      p.rowBodyEl.className = 'row-body error';
+      p.rowBodyEl.textContent = '该站点触发了人机验证，双击按钮全屏完成验证后，点行尾 ↻ 重发该家。';
+      updateProgress();
+      return;
+    }
     // 页面还在「搜索中/思考中」等占位状态：保持生成中，不计稳定、不判完成
     if (res.pending) {
       p.stableCount = 0;
@@ -985,11 +1032,12 @@ function notify(title, body) {
 }
 
 function getAutoSummary() {
-  return localStorage.getItem('rt_autoSummary') === '1';
+  // 默认开启「全部交卷后自动总结」，仅显式存过 '0' 才视为关闭
+  return localStorage.getItem('rt_autoSummary') !== '0';
 }
 
 // 本轮全部到终态后的收尾（每轮只触发一次）：完成通知 + 可选自动总结。
-// 服务轮次（飞书/HTTP）本身固定会总结，不在这里重复触发
+// 服务轮次（HTTP/agent 触发）本身固定会总结，不在这里重复触发
 function checkRoundSettled() {
   if (roundSettleHandled) return;
   const scope = roundScope();
@@ -1016,16 +1064,21 @@ function updateProgress() {
       (counts.sending ? ` · 发送中 ${counts.sending}` : '') +
       (counts.error ? ` · 失败 ${counts.error}（可跳过）` : '');
   }
-  summarizeBtn.disabled = counts.done === 0;
+  // >3 家交卷即可提前总结；整轮全部到终态后，有 1 家交卷也可总结（兼容只选少数几家）
+  const roundSettled = counts.idle + counts.sending + counts.generating === 0;
+  const canSummary = counts.done >= 4 || (roundSettled && counts.done >= 1);
+  summarizeBtn.disabled = !canSummary;
   summarizeBtn.textContent = '总结';
-  summarizeBtn.title = counts.done ? `生成总结（${counts.done} 家已完成）` : '生成总结';
+  summarizeBtn.title = canSummary
+    ? `生成总结（${counts.done} 家已完成${roundSettled ? '' : '，提前总结'}）`
+    : '4 家交卷后可提前总结';
 
   // 优化3：进度条（done + error 视为已到终态）
   const settled = counts.done + counts.error;
   progressFill.style.width = total ? `${Math.round((settled / total) * 100)}%` : '0%';
   progressFill.className = counts.error ? 'err' : '';
 
-  // 服务编排：若正有飞书触发的轮次在跑，顺带上报进度
+  // 服务编排：若正有 HTTP/agent 触发的轮次在跑，顺带上报进度
   if (activeServiceRequestId) {
     roundtable.reportServiceProgress({ requestId: activeServiceRequestId, total, ...counts });
   }
@@ -1150,7 +1203,7 @@ function buildSummaryToc() {
     sep.className = 'toc-sep';
     summaryToc.appendChild(sep);
 
-    // 「各家意见」一级分组：点击展开/收起 8 家二级标签，并跳到附录
+    // 「各家意见」一级分组：点击展开/收起各家二级标签，并跳到附录
     const groupWrap = document.createElement('div');
     groupWrap.className = 'toc-group';
     const caret = document.createElement('span');
@@ -1274,11 +1327,12 @@ function renderMarkdown(md) {
 
 function getSettings() {
   return {
-    // 总结方式：web=DeepSeek 第二账号网页总结（默认），api=OpenAI 兼容接口（备选）
+    // 总结方式：web=DeepSeek 第二账号网页总结（默认），api=OpenAI 兼容接口
+    // API 默认指向智谱免费模型 GLM-4.7-Flash，只需填自己的 API Key 即可用
     summaryMode: localStorage.getItem('rt_summaryMode') === 'api' ? 'api' : 'web',
-    baseURL: localStorage.getItem('rt_baseURL') || '',
+    baseURL: localStorage.getItem('rt_baseURL') || 'https://open.bigmodel.cn/api/paas/v4',
     apiKey: localStorage.getItem('rt_apiKey') || '',
-    model: localStorage.getItem('rt_model') || '',
+    model: localStorage.getItem('rt_model') || 'glm-4.7-flash',
   };
 }
 
@@ -1291,12 +1345,12 @@ function getSettings() {
 const SUMMARY_CONTENT =
   '你是一位中立的圆桌主持人。下面是同一个问题下多家 AI 的回答。' +
   '请输出一份结构化总结，严格按以下五个部分组织：' +
-  '一、主要共识：归纳超过半数的参与家数一致的观点（8 家全参与时即 5 家及以上）；' +
+  '一、主要共识：归纳超过半数的参与家数一致的观点（9 家全参与时即 5 家及以上）；' +
   '二、次要共识：2 家到 4 家一致的观点；' +
   '三、分歧观点：任意两家及以上不一致的观点，说明各方立场与各自理由；' +
   '四、个性观点：仅一家提出的独特观点；' +
   '五、综合意见：综合各家意见，给出一个「最大公约数」的回答版本。' +
-  '每条观点后用括号注明持该观点的家名，如（千问、豆包、Kimi）；' +
+  '每条观点后用括号注明持该观点的家名，如（千问、豆包、Kimi、MiMo）；' +
   '某部分没有内容时写「无」。' +
   '结构层次用中文序号体现：一级标题（五个部分）用「一、二、三、四、五、」，' +
   '二级标题（部分内的各小节）必须用「（一）（二）（三）」；' +
@@ -1324,7 +1378,7 @@ const SUMMARY_FORMAT_WEB =
 const SUMMARY_TEMPLATE = SUMMARY_CONTENT + SUMMARY_FORMAT_API;
 const SUMMARY_TEMPLATE_WEB = SUMMARY_CONTENT + SUMMARY_FORMAT_WEB;
 
-// 核心总结逻辑：按钮与飞书服务共用。成功返回总结文本；失败抛出错误（同时已更新 DOM）。
+// 核心总结逻辑：按钮与 HTTP 服务轮次共用。成功返回总结文本；失败抛出错误（同时已更新 DOM）。
 let summarizeBusy = false; // 自动/手动触发共用的防重入锁
 async function doSummarize() {
   if (summarizeBusy) throw new Error('总结正在进行中');
@@ -1400,7 +1454,7 @@ async function summarizeViaAPI(settings, usable, skipped) {
 
 // ================= 网页总结（DeepSeek 第二账号，独立分区）=================
 // 【回退模式】各家原文截断上限：附件上传不可用时退化为纯文本提示词，
-// 此时控制总长度（8 家约 1.6 万字）防超出网页输入框限制。
+// 此时控制总长度（9 家约 1.8 万字）防超出网页输入框限制。
 const WEB_SUMMARY_PER_FAMILY_LIMIT = 2000;
 // 长总结（五段结构、数千字）生成较慢；超时判失败，用户可重试或切 API
 const WEB_SUMMARY_TIMEOUT = 300000;
@@ -1495,7 +1549,7 @@ async function waitSendReady(webview) {
 // 与参与回答的 deepseek 面板互不干扰。
 async function summarizeViaWeb(usable, skipped) {
   const sp = summarizerPanel;
-  // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（飞书/HTTP 服务轮次）不打扰
+  // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（HTTP 服务轮次）不打扰
   if (!document.hidden) focusPanel(SUMMARIZER.id);
 
   setStatus(sp.statusEl, '正在打开新总结会话…');
@@ -1679,7 +1733,7 @@ document.getElementById('summary-title').addEventListener('click', () => {
   focusPanel(SUMMARIZER.id);
 });
 
-// ================= 飞书服务编排（Phase 2） =================
+// ================= 服务编排（本地 HTTP / agent 触发轮次） =================
 // main 进程经 IPC 触发一轮圆桌：广播 → 等回复 → 总结 → 回报结果。
 let activeServiceRequestId = null; // 正在跑的服务轮次 id（供 updateProgress 上报进度）
 let serviceBusy = false;
@@ -1707,7 +1761,7 @@ function waitForRoundComplete(timeoutMs = 420000) {
   });
 }
 
-// 汇总本轮各家回复（含状态），供回报飞书/HTTP
+// 汇总本轮各家回复（含状态），供回报 HTTP 调用方
 function collectReplies() {
   return roundScope().map((p) => ({
     id: p.adapter.id,
@@ -1970,30 +2024,33 @@ document.addEventListener('mouseup', () => {
   }
 });
 
-// ================= 模型栏/输出区 横向拖拽分隔条 =================
+// ================= 模型栏/输出区 横向拖拽分隔条（调整输入框高度） =================
+// 拖动时 8 个模型按钮高度保持不变，只改变顶部输入框高度（输入框在上方，拖下即增高）
 const hDivider = document.getElementById('h-divider');
-const modelBar = document.getElementById('model-bar');
 let hDividerDragging = false;
 let hDividerMoved = false;
+let hDragStartY = 0;
+let promptStartH = 0;
 
-// 默认高度以上次拖到的为准（localStorage 持久化；首次为 CSS 自适应）
+// 默认高度以上次拖到的为准（localStorage 持久化；首次为 CSS 默认 54px）
 try {
-  const savedH = parseInt(localStorage.getItem('rt_modelbar_h'), 10);
-  if (savedH >= 44 && savedH <= 240) modelBar.style.height = `${savedH}px`;
+  const savedH = parseInt(localStorage.getItem('rt_prompt_h'), 10);
+  if (savedH >= 54 && savedH <= 180) promptEl.style.height = `${savedH}px`;
 } catch {}
 
 hDivider.addEventListener('mousedown', (e) => {
   hDividerDragging = true;
   hDividerMoved = false;
+  hDragStartY = e.clientY;
+  promptStartH = promptEl.getBoundingClientRect().height;
   document.body.style.cursor = 'row-resize';
   document.body.style.userSelect = 'none';
   e.preventDefault();
 });
 document.addEventListener('mousemove', (e) => {
   if (!hDividerDragging) return;
-  const top = modelBar.getBoundingClientRect().top;
-  const h = Math.max(44, Math.min(240, e.clientY - top));
-  modelBar.style.height = `${h}px`;
+  const h = Math.max(54, Math.min(180, promptStartH + (e.clientY - hDragStartY)));
+  promptEl.style.height = `${h}px`;
   hDividerMoved = true;
 });
 document.addEventListener('mouseup', () => {
@@ -2004,7 +2061,7 @@ document.addEventListener('mouseup', () => {
   // 只有真的拖动过才保存，避免误点分隔条把当前高度固化
   if (!hDividerMoved) return;
   try {
-    localStorage.setItem('rt_modelbar_h', String(parseInt(modelBar.style.height, 10) || ''));
+    localStorage.setItem('rt_prompt_h', String(parseInt(promptEl.style.height, 10) || ''));
   } catch {}
 });
 

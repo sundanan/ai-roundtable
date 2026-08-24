@@ -11,3 +11,6 @@ config.local.json
 # 个人文章与截图素材，不随仓库分发
 docs/wechat-article/
 
+
+# 说明书制作过程素材（截图等），不随仓库分发
+projects/

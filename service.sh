@@ -23,15 +23,20 @@ if [ -z "$DISPLAY" ]; then
 fi
 
 echo "===== AI圆桌服务启动 $(date '+%F %T') =====" >> "$LOG"
+# GPU 加固：--disable-gpu 仅关硬件加速，Chromium 仍会尝试拉起独立 GPU 进程；
+# 本机（统信 UOS arm64）该进程反复启动失败（error_code=1002）并 FATAL 掉整个应用
+# （2026-08-21/22/23 三次同样死法，8-22 那次宕机 44 小时）。--in-process-gpu 把
+# GPU 任务并入主进程，不再派生这个必崩的子进程。
+GPU_FLAGS="--disable-gpu --in-process-gpu --ozone-platform=x11"
 # 位置自适应：
 # - 开发版：本脚本在仓库根（electron 在 node_modules 里，应用根为当前目录 "."）
 # - 安装版（deb）：本脚本在 /opt/ai-roundtable/resources/ 下，二进制在上一级
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -x "$SELF_DIR/node_modules/electron/dist/electron" ]; then
   cd "$SELF_DIR" || exit 1
-  exec ./node_modules/electron/dist/electron . --disable-gpu --ozone-platform=x11 >> "$LOG" 2>&1
+  exec ./node_modules/electron/dist/electron . $GPU_FLAGS >> "$LOG" 2>&1
 elif [ -x "$SELF_DIR/../ai-roundtable" ]; then
-  exec "$SELF_DIR/../ai-roundtable" --disable-gpu --ozone-platform=x11 >> "$LOG" 2>&1
+  exec "$SELF_DIR/../ai-roundtable" $GPU_FLAGS >> "$LOG" 2>&1
 else
   echo "未找到 electron 可执行文件（$SELF_DIR 下既无 node_modules/electron，上一级也无 ai-roundtable）" >> "$LOG"
   exit 1

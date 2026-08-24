@@ -17,6 +17,7 @@ const ADAPTERS = [
   {
     id: 'qwen',
     name: '千问',
+    // tongyi.com 已改版重定向到 qianwen.com（2026-08-24 CDP 实测）
     url: 'https://www.tongyi.com/',
     inputSelectors: [
       '[data-slate-editor]',
@@ -27,7 +28,12 @@ const ADAPTERS = [
       'button[aria-label="发送消息"]',
       'button[class*="send"]',
     ],
+    // 2026-08-24 改版实测：答案渲染在 div.qk-markdown（qk-md-paragraph > span.qk-md-text），
+    // 外层容器 .answer-common-card / .markdown-pc-special-class；问题气泡是
+    // .question-text-card（类名含 question，会被 USER_BOX 启发式排除，专属选择器在前更稳）
     responseSelectors: [
+      '.qk-markdown',
+      '[class*="answer-common-card"]',
       '[class*="markdown"]',
       '[class*="answerContent"]',
       '[class*="message-content"]',
@@ -213,6 +219,35 @@ const ADAPTERS = [
       '[class*="message-content"]',
     ],
   },
+  {
+    id: 'mimo',
+    name: 'MiMo',
+    url: 'https://aistudio.xiaomimimo.com/#/c',
+    // 小米 MiMo（Xiaomi MiMo Studio）。2026-08-23 登录后实测校准：
+    // - 需小米账号登录才能聊天，未登录点发送会跳 account.xiaomi.com 登录页（登录态在
+    //   persist:mimo 分区长期保存）；
+    // - 输入框是无 id 的 textarea（Tailwind 类名无稳定标识），placeholder 随登录态变化；
+    // - 发送键无 aria/testid/类名标识，靠结构定位：输入区容器内最后一个按钮（纸飞机），
+    //   :has() 绑定 textarea 结构，不会误配侧栏/公告等按钮；
+    // - 回复渲染在 CSS Modules 容器 Markdown_markdown__*（含稳定前缀）；
+    // - strictResponse：首页示例问题按钮类名含 message，通用兜底 [class*="message"]
+    //   会在发送阶段误抓示例文本（2026-08-23 实测三轮均误判完成），故只用专属选择器；
+    // - 剪掉思考折叠条 Collapsible_*（"已深度思考"标签及展开的推理文本不算答案）。
+    strictResponse: true,
+    inputSelectors: [
+      'textarea[placeholder]',
+      'textarea',
+    ],
+    sendSelectors: [
+      'div:has(> div > textarea) button:last-child',
+      'button[class*="send" i]',
+      'button[class*="submit" i]',
+    ],
+    responseSelectors: [
+      '[class*="Markdown_markdown__"]',
+    ],
+    pruneSelectors: ['[class*="Collapsible_" i]'],
+  },
 ];
 
 /**
@@ -257,3 +292,8 @@ const SUMMARIZER = {
     '[class*="message"] [class*="content"]',
   ],
 };
+
+// Node 侧引用（主进程校验 /ask 的 sites 参数）；渲染层按浏览器脚本加载时此分支无害
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { ADAPTERS, SUMMARIZER };
+}

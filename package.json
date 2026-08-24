@@ -1,10 +1,10 @@
 {
   "name": "ai-roundtable",
   "version": "1.2.0",
-  "description": "AI 圆桌：一个输入框，把问题同时发给 8 个 AI 网页版（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心），收集回复并自动汇总",
+  "description": "AI 圆桌：一个输入框，把问题同时发给 9 个 AI 网页版（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心/MiMo），收集回复并自动汇总",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron . --disable-gpu --ozone-platform=x11",
+    "start": "electron . --disable-gpu --in-process-gpu --ozone-platform=x11",
     "dist:deb": "electron-builder --linux deb"
   },
   "keywords": [
@@ -20,10 +20,6 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3"
   },
-  "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.72.0",
-    "dotenv": "^17.4.2"
-  },
   "build": {
     "appId": "com.sundanan.ai-roundtable",
     "productName": "ai-roundtable",
@@ -37,8 +33,14 @@
       "README.md"
     ],
     "extraResources": [
-      { "from": "service.sh", "to": "." },
-      { "from": "scripts/setup-autostart.sh", "to": "." }
+      {
+        "from": "service.sh",
+        "to": "."
+      },
+      {
+        "from": "scripts/setup-autostart.sh",
+        "to": "."
+      }
     ],
     "linux": {
       "icon": "assets/icon.png",
@@ -60,8 +62,14 @@
         }
       },
       "extraResources": [
-        { "from": "service.sh", "to": "." },
-        { "from": "scripts/setup-autostart.sh", "to": "." }
+        {
+          "from": "service.sh",
+          "to": "."
+        },
+        {
+          "from": "scripts/setup-autostart.sh",
+          "to": "."
+        }
       ]
     },
     "win": {
@@ -75,7 +83,10 @@
         }
       ],
       "extraResources": [
-        { "from": "scripts/setup-autostart-windows.bat", "to": "." }
+        {
+          "from": "scripts/setup-autostart-windows.bat",
+          "to": "."
+        }
       ]
     },
     "nsis": {

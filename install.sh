@@ -19,15 +19,6 @@ echo "    node $(node -v) / npm $(npm -v)"
 echo "==> 安装依赖（electron 体积较大，首次安装请耐心等待）"
 npm install
 
-echo "==> 检查环境变量配置"
-if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "    已生成 .env（模板）。如需飞书入口，请填入你自己的 FEISHU_APP_ID / FEISHU_APP_SECRET；"
-  echo "    不用飞书可留空，桌面端与本地 HTTP 接口不受影响。"
-else
-  echo "    .env 已存在，跳过"
-fi
-
 echo "==> 完成"
 echo ""
 echo "后续步骤："

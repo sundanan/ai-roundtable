@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('roundtable', {
   sendEnter: (webContentsId) => ipcRenderer.invoke('send-enter', webContentsId),
   clickAt: (webContentsId, x, y) => ipcRenderer.invoke('click-at', webContentsId, x, y),
 
-  // ===== 飞书服务编排（Phase 2）=====
+  // ===== 服务编排（本地 HTTP / agent 触发轮次）=====
   // main 进程触发一轮圆桌：{ requestId, question }
   onServiceAsk: (fn) => ipcRenderer.on('service:ask', (_e, data) => fn(data)),
   // renderer 上报进度 / 最终结果

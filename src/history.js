@@ -1,7 +1,7 @@
 /**
  * 历史记录存储（改进1）。
  * 每轮圆桌结果追加到 userData/roundtable-history.json，最多保留 MAX_ENTRIES 条。
- * 供桌面端、飞书、Hermes skill 查询。
+ * 供桌面端、本地 HTTP、Hermes skill 查询。
  */
 const fs = require('fs');
 const path = require('path');

@@ -2,38 +2,10 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, screen, web
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
-// 加载 .env（FEISHU_APP_ID / FEISHU_APP_SECRET，再引入飞书桥接）：
-// 开发版用仓库根目录的 .env；安装版（deb）应用目录不可写，改用用户数据目录
-// ~/.config/ai-roundtable/.env，首次运行不存在时自动生成模板供用户填写
-(function loadEnv() {
-  const devEnv = path.join(__dirname, '..', '.env');
-  if (fs.existsSync(devEnv)) {
-    require('dotenv').config({ path: devEnv });
-    return;
-  }
-  const userEnv = path.join(app.getPath('userData'), '.env');
-  if (!fs.existsSync(userEnv)) {
-    try {
-      fs.mkdirSync(path.dirname(userEnv), { recursive: true });
-      fs.writeFileSync(
-        userEnv,
-        [
-          '# AI 圆桌配置（安装版）',
-          '# 飞书机器人凭证（可选）：不填则飞书入口不可用，桌面端与本地 HTTP 接口照常',
-          '# FEISHU_APP_ID=cli_xxxxxxxx',
-          '# FEISHU_APP_SECRET=xxxxxxxx',
-          '# 会话白名单（可选，逗号分隔 chat_id；群消息还需 @机器人）',
-          '# FEISHU_ALLOW_CHAT_IDS=',
-          '',
-        ].join('\n'),
-        'utf8'
-      );
-    } catch {}
-  }
-  require('dotenv').config({ path: userEnv });
-})();
-const { createFeishuBridge } = require('./feishu');
 const history = require('./history');
+// 适配器清单仅用于校验 /ask 的 sites 参数（纯配置，无 Electron 依赖，可安全 require）
+const { ADAPTERS } = require('./adapters');
+const VALID_SITE_IDS = new Set(ADAPTERS.map((a) => a.id));
 
 // 去掉 File/Edit/View 原生菜单栏，界面只保留自己的按钮
 Menu.setApplicationMenu(null);
@@ -53,7 +25,7 @@ function createTray() {
   let icon = nativeImage.createFromPath(iconPath);
   if (!icon.isEmpty()) icon = icon.resize({ height: 16 });
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
-  tray.setToolTip('AI 圆桌（飞书机器人服务运行中）');
+  tray.setToolTip('AI 圆桌');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -95,23 +67,23 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('ozone-platform', 'x11');
 }
 // Windows：Chromium 的原生窗口遮挡检测会把隐藏到托盘的窗口判定为"遮挡"并暂停
-// 渲染，托盘常驻期间飞书/HTTP 触发的轮次会停摆（Electron on Windows 已知问题）。
+// 渲染，托盘常驻期间 HTTP 触发的轮次会停摆（Electron on Windows 已知问题）。
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 }
 
-// ===== 服务编排：飞书桥接 + 本地 HTTP 接口（供 Hermes skill 调用）=====
+// ===== 服务编排：本地 HTTP 接口（供 Hermes skill 等 agent 调用）=====
 const http = require('http');
 const ROUNDTABLE_PORT = Number(process.env.ROUNDTABLE_PORT || 8765); // 仅监听 127.0.0.1
 
 let mainWindow = null;
-// requestId -> { source:'feishu'|'http', chatId?, httpRes?, question, watchdog? }，结果回来时按来源路由
+// requestId -> { source:'http', httpRes?, question, watchdog? }，结果回来时按来源路由
 const pendingRounds = new Map();
 
 // 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 12 分钟
 // （轮次等待 420s + 网页总结 300s + 发送/抓取余量）。超过 15 分钟仍无回报，
 // 基本可判定 renderer 崩溃/卡死——若不主动释放，pendingRounds 永久非空，
-// 飞书/HTTP 会一直 busy/429，整个服务卡死到重启。这里兜底清理并回报超时。
+// HTTP 接口会一直 busy/429，整个服务卡死到重启。这里兜底清理并回报超时。
 const ROUND_WATCHDOG_MS = 15 * 60 * 1000;
 function armRoundWatchdog(requestId) {
   const pending = pendingRounds.get(requestId);
@@ -124,31 +96,12 @@ function armRoundWatchdog(requestId) {
       try {
         jsonResponse(pending.httpRes, 504, { ok: false, error: 'round-timeout', message: '本轮处理超时（15 分钟未回报），请重试' });
       } catch {}
-    } else if (bridge && pending.chatId) {
-      bridge.sendText(pending.chatId, '本轮处理超时（15 分钟未回报），请重新发送问题').catch(() => {});
     }
   }, ROUND_WATCHDOG_MS);
 }
 function clearRoundWatchdog(requestId) {
   const pending = pendingRounds.get(requestId);
   if (pending && pending.watchdog) clearTimeout(pending.watchdog);
-}
-
-// 纯文本格式化：总结（内含附录各家原文，由 renderer 拼接）——飞书用
-function formatResultText(data) {
-  if (data.error === 'busy') return data.message || '正在处理上一条，请稍候';
-  if (data.error) return `出错了：${data.message || data.error}`;
-  if (data.summary) return data.summary;
-  // 总结失败时才退化为逐家摘录（单家截断到 1200 字），避免与附录重复
-  let out = '';
-  if (data.summaryError) out += `【总结失败】${data.summaryError}\n`;
-  out += '\n【各家回复】';
-  for (const r of data.replies) {
-    const tag = r.state === 'done' ? '' : `（${r.state}）`;
-    const body = r.text ? r.text.slice(0, 1200) + (r.text.length > 1200 ? '…(截断)' : '') : '（无回复）';
-    out += `\n◆ ${r.name}${tag}\n${body}`;
-  }
-  return out;
 }
 
 // 触发一轮圆桌：向 renderer 下发 service:ask；sites 为可选子集（改进2），缺省全部
@@ -160,7 +113,7 @@ function startRound(requestId, question, sites) {
   return false;
 }
 
-// 总结落成 docx（pandoc 转换），飞书/微信渠道以文件形式发送；失败返回 null 由调用方回退纯文本
+// 总结落成 docx（pandoc 转换），HTTP/微信等渠道以文件形式发送；失败返回 null 由调用方回退纯文本
 function buildSummaryDocx(question, summary) {
   return new Promise((resolve) => {
     try {
@@ -204,49 +157,30 @@ function buildSummaryDocx(question, summary) {
   });
 }
 
-// 飞书桥接为可选：未配置 FEISHU_APP_ID/SECRET 时跳过，桌面端与本地 HTTP 入口照常可用
-let bridge = null;
-try {
-  bridge = createFeishuBridge({
-    onState: (state, err) => {
-      if (state === 'ready') console.log('[feishu] 长连接就绪');
-      if (state === 'error') console.error('[feishu] 连接错误:', err && err.message);
-      if (state === 'reconnecting') console.log('[feishu] 断线重连中…');
-      if (state === 'reconnected') console.log('[feishu] 已重连');
-    },
-    onQuestion: ({ requestId, question, chatId }) => {
-      console.log(`[feishu] 收到问题: ${question}`);
-      if (pendingRounds.size > 0) {
-        bridge.sendText(chatId, '正在处理上一条，请稍候').catch(() => {});
-        return;
-      }
-      pendingRounds.set(requestId, { source: 'feishu', chatId, question });
-      if (startRound(requestId, question)) {
-        armRoundWatchdog(requestId);
-        bridge.sendText(chatId, `收到：${question}\n正在问 8 家，请稍候…`).catch(() => {});
-      } else {
-        pendingRounds.delete(requestId);
-        bridge.sendText(chatId, '服务窗口尚未就绪，请稍后再试').catch(() => {});
-      }
-    },
-  });
-} catch (e) {
-  console.warn(`[feishu] 桥接未启用：${e.message}（仅影响飞书入口，桌面端/本地 HTTP 不受影响）`);
-}
-
 // ----- 本地 HTTP 接口 -----
+// 超大 body 专用错误：调用方据此回 413。
+// 注意：超限只 reject、不毁连接——先让调用方把 413 写回去再关（2026-08-24 实测
+// 先 destroy 时客户端只收到 100-continue，看不到任何状态码）。
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let d = '';
+    let overflow = false;
     req.on('data', (c) => {
+      if (overflow) return;
       d += c;
       if (d.length > 1e6) {
-        reject(new Error('body too large'));
-        req.destroy();
+        overflow = true;
+        const e = new Error('body-too-large');
+        e.code = 'BODY_TOO_LARGE';
+        reject(e);
       }
     });
-    req.on('end', () => resolve(d));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (!overflow) resolve(d);
+    });
+    req.on('error', (e) => {
+      if (!overflow) reject(e);
+    });
   });
 }
 
@@ -263,24 +197,67 @@ const httpServer = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/ask') {
       let question = '';
       let sites;
+      let async = false;
+      let raw;
       try {
-        const body = JSON.parse((await readBody(req)) || '{}');
+        raw = await readBody(req);
+      } catch (e) {
+        if (e && e.code === 'BODY_TOO_LARGE') {
+          // Connection: close：上传流已被截断，此连接不可复用
+          res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8', Connection: 'close' });
+          res.end(JSON.stringify({ ok: false, error: 'body-too-large', message: '请求体过大（上限 1MB）' }));
+          return;
+        }
+        return jsonResponse(res, 400, { ok: false, error: 'bad-request', message: String((e && e.message) || e) });
+      }
+      try {
+        const body = JSON.parse(raw || '{}');
         question = (body.question || '').trim();
-        if (Array.isArray(body.sites) && body.sites.length) sites = body.sites.map(String);
+        async = body.async === true;
+        if (Array.isArray(body.sites) && body.sites.length) {
+          // 未知站点 id 显式拒绝（此前静默过滤，全部未知时会空跑一轮还消耗总结）；
+          // 部分有效则取交集并告警，容忍 skill 侧笔误
+          const wanted = body.sites.map(String);
+          sites = wanted.filter((id) => VALID_SITE_IDS.has(id));
+          if (!sites.length) {
+            return jsonResponse(res, 400, {
+              ok: false,
+              error: 'invalid-sites',
+              message: 'sites 中没有有效的站点 id',
+              valid: [...VALID_SITE_IDS],
+            });
+          }
+          const dropped = wanted.filter((id) => !VALID_SITE_IDS.has(id));
+          if (dropped.length) console.warn(`[http] 忽略未知站点: ${dropped.join(',')}`);
+        }
       } catch {}
       if (!question) return jsonResponse(res, 400, { ok: false, error: 'missing-question' });
       if (pendingRounds.size > 0) {
         return jsonResponse(res, 429, { ok: false, error: 'busy', message: '正在处理另一轮，请稍候' });
       }
-      const requestId = 'http-' + Date.now();
-      pendingRounds.set(requestId, { source: 'http', httpRes: res, question, sites });
+      const requestId = (async ? 'async-' : 'http-') + Date.now();
+      pendingRounds.set(requestId, { source: async ? 'http-async' : 'http', httpRes: async ? null : res, question, sites });
       if (!startRound(requestId, question, sites)) {
         pendingRounds.delete(requestId);
         return jsonResponse(res, 503, { ok: false, error: 'not-ready', message: '服务窗口尚未就绪' });
       }
       armRoundWatchdog(requestId);
-      console.log(`[http] 收到问题: ${question}${sites ? '（子集:' + sites.join(',') + '）' : ''}`);
-      return; // 响应挂起，待 service:result 写回（看门狗兜底超时释放）
+      console.log(`[http] 收到问题${async ? '（异步）' : ''}: ${question}${sites ? '（子集:' + sites.join(',') + '）' : ''}`);
+      // 异步模式：受理即返回 requestId，结果经 /ask/status 或 /history/item 轮询。
+      // 最坏总时长（420s 轮次 + 300s 总结）远超同步 curl 的合理超时，长轮询必丢结果。
+      if (async) {
+        return jsonResponse(res, 202, { ok: true, accepted: true, requestId, poll: `/ask/status?id=${requestId}` });
+      }
+      return; // 同步模式：响应挂起，待 service:result 写回（看门狗兜底超时释放）
+    }
+    // 异步轮次状态查询：running=还在跑；done=已完成（item 为完整结果）；404=不存在
+    if (req.method === 'GET' && req.url.startsWith('/ask/status')) {
+      const u = new URL('http://x' + req.url);
+      const id = u.searchParams.get('id') || '';
+      if (pendingRounds.has(id)) return jsonResponse(res, 200, { ok: true, state: 'running' });
+      const found = history.query('', 10000).find((e) => e.id === id);
+      if (found) return jsonResponse(res, 200, { ok: true, state: 'done', item: found });
+      return jsonResponse(res, 404, { ok: false, state: 'not-found', error: 'not-found' });
     }
     // 改进1：单条历史详情 GET /history/item?id=xxx（须放在 /history 列表之前判断）
     if (req.method === 'GET' && req.url.startsWith('/history/item')) {
@@ -313,7 +290,7 @@ const httpServer = http.createServer(async (req, res) => {
   }
 });
 
-// renderer 回报最终结果 → 按来源路由（飞书：摘要文本 + docx 附件；HTTP：JSON 带 summaryFile）
+// renderer 回报最终结果 → HTTP 渠道回写 JSON（带 summaryFile 附件路径）
 ipcMain.on('service:result', async (_event, data) => {
   const pending = pendingRounds.get(data.requestId);
   if (!pending) return;
@@ -355,24 +332,6 @@ ipcMain.on('service:result', async (_event, data) => {
     }
     return;
   }
-
-  if (!bridge) return;
-  if (docxPath) {
-    const doneCount = (data.replies || []).filter((r) => r.state === 'done').length;
-    try {
-      await bridge.sendText(
-        pending.chatId,
-        `圆桌完成：${pending.question}\n${doneCount}/${(data.replies || []).length} 家成功，总结（五段结构 + 各家原文附录）见附件 docx。`
-      );
-      await bridge.sendFile(pending.chatId, docxPath);
-      return;
-    } catch (e) {
-      console.error('[feishu] docx 发送失败，回退纯文本:', e && e.message);
-    }
-  }
-  bridge.sendText(pending.chatId, formatResultText(data)).catch((e) => {
-    console.error('[feishu] 发送结果失败:', e && e.message);
-  });
 });
 
 // renderer 上报进度（Phase 2 仅记录；Phase 3 用于增量更新卡片）。
@@ -382,7 +341,7 @@ ipcMain.on('service:progress', (_event, data) => {
   const line = `进度 done=${data.done}/${data.total} 生成中=${data.generating} 失败=${data.error}`;
   if (line === lastProgressLine) return;
   lastProgressLine = line;
-  console.log(`[feishu] ${line}`);
+  console.log(`[service] ${line}`);
 });
 
 // ===== 历史记录（改进1，桌面端同步）=====
@@ -422,7 +381,11 @@ ipcMain.handle('build-upload-file', async (_event, markdown) => {
       // hard_line_breaks：模板与原文是单换行纯文本，缺此参数 pandoc 会把换行折叠成空格
       execFile('pandoc', ['-f', 'markdown+hard_line_breaks', mdPath, '-o', docxPath], { timeout: 30000 }, () => resolve());
     });
-    if (fs.existsSync(docxPath)) return { ok: true, path: docxPath };
+    if (fs.existsSync(docxPath)) {
+      // docx 已成：中间产物 md 即时清理（上传用的是 docx；md 仅在转换失败时作回退附件）
+      try { fs.unlinkSync(mdPath); } catch {}
+      return { ok: true, path: docxPath };
+    }
     return { ok: true, path: mdPath }; // pandoc 不可用时直接上传 md 原文
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
@@ -577,13 +540,6 @@ ipcMain.handle('call-llm', async (event, { baseURL, apiKey, model, messages }) =
 app.whenReady().then(() => {
   createWindow();
   createTray();
-  // 启动飞书长连接桥接（可选）
-  if (bridge) {
-    bridge
-      .start()
-      .then(() => console.log('[feishu] 桥接已启动'))
-      .catch((e) => console.error('[feishu] 桥接启动失败:', e && e.message));
-  }
   // 启动本地 HTTP 接口（仅 127.0.0.1，供 Hermes skill 调用）
   httpServer.on('error', (e) => console.error('[http] 服务启动失败:', e && e.message));
   httpServer.listen(ROUNDTABLE_PORT, '127.0.0.1', () => {
@@ -605,13 +561,24 @@ app.on('second-instance', () => {
 
 // 常驻托盘：关掉所有窗口也不退出（窗口是隐藏而非销毁）
 app.on('window-all-closed', () => {
-  // 故意留空：保持后台常驻，飞书服务继续运行
+  // 故意留空：保持后台常驻，HTTP 服务继续运行
 });
 
 app.on('before-quit', () => {
   isQuitting = true;
-  if (bridge) bridge.stop();
   try {
     httpServer.close();
   } catch {}
 });
+
+// SIGTERM/SIGINT 显式退出：Electron 默认收到 SIGTERM 不会及时退出（2026-08 实测
+// `systemctl stop/restart` 挂满 90s TimeoutStopSec 才被 SIGKILL，journal 两次
+// 'stop-sigterm timed out'）；挂起期间若再撞上 GPU 崩溃，unit 以 failed 收场且
+// 不再触发 Restart（2026-08-22 宕机 44 小时未自愈的诱因链）。显式 quit 让
+// systemd 治理（TimeoutStopSec/Restart）真正可靠。
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    isQuitting = true;
+    app.quit();
+  });
+}

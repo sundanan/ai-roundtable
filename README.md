@@ -1,11 +1,11 @@
 # AI 圆桌（AI Roundtable）
 
-一个输入框，把同一个问题**同时发给 8 个 AI 网页版**，收集各家回复，再自动汇总成一份横向总结。
+一个输入框，把同一个问题**同时发给 9 个 AI 网页版**，收集各家回复，再自动汇总成一份横向总结。
 
 | | | | |
 |---|---|---|---|
 | 千问 | 豆包 | 元宝 | 智谱 |
-| Kimi | DeepSeek | MiniMax | 文心 |
+| Kimi | DeepSeek | MiniMax | 文心 | MiMo |
 
 **不需要申请任何 API Key**——复用你浏览器里已登录的各家网页版账号，通过网页自动化模拟真人提问、轮询抓取回复。多家独立作答、交叉验证，缓解单一模型的幻觉与视角偏差。
 
@@ -15,8 +15,8 @@
 
 ```
                  ┌────────────── 桌面 GUI（输入框/状态灯/总结面板）────────────┐
- 飞书机器人 ────► │   Electron 常驻应用                                        │
- (长连接,可选)    │   ├─ 8 个 webview（persist 分区保存登录态，常驻）           │
+                 │   Electron 常驻应用                                        │
+                 │   ├─ 9 个 webview（persist 分区保存登录态，常驻）           │
                  │   ├─ 引擎：广播→轮询抓取→(陈旧检测/重试)→LLM 总结           │
  Agent skill ───►│   ├─ 本地 HTTP 接口 127.0.0.1:8765                         │
  (curl /ask)     │   └─ 历史记录落库（userData，最多 200 条）                  │
@@ -27,20 +27,19 @@
 - 引擎每 3 秒轮询抓取回复，内置防误判机制：问题回音排除、"思考中/搜索中"占位识别、陈旧回复检测、发送失败自动重试；
 - 全部交卷（或到达轮次上限）后生成五段结构化总结：默认 **网页总结**——DeepSeek 第二账号（独立分区、免 API Key），各家无删减原文合成 docx 以附件上传、绕开输入框字数限制；设置里可切换为任意 OpenAI 兼容 API（备选）。
 
-## 三种入口
+## 两种入口
 
-1. **桌面 GUI**：输入框 + 8 家状态灯 + 总结面板（五段结构 + 目录跳转/scroll-spy），单击模型按钮全屏打开（手动登录/查看），参与各家与发送快捷键（Enter 或 Ctrl+Enter）在「设置」里勾选，行尾 ↻ 单家补发；设置里可开「全部交卷后自动总结」；
-2. **飞书机器人**（可选）：私聊机器人发一句话即触发，回复"摘要 + 总结 docx 附件"；
-3. **本地 HTTP 接口**：供 agent/脚本集成（见下方接口说明与 `integrations/hermes-skill/` 内的现成 skill），返回 `summaryFile`（总结 docx 路径）供微信等渠道按附件发送。
+1. **桌面 GUI**：输入框 + 8 家状态灯 + 总结面板（五段结构 + 目录跳转/scroll-spy），单击模型按钮全屏打开（手动登录/查看），参与各家与发送快捷键（Enter 或 Ctrl+Enter）在「设置」里勾选，行尾 ↻ 单家补发；「全部交卷后自动总结」默认开启（设置里可关），>3 家交卷后也可手动提前总结；
+2. **本地 HTTP 接口**：供 agent/脚本集成（见下方接口说明与 `integrations/hermes-skill/` 内的现成 skill），返回 `summaryFile`（总结 docx 路径）供微信等渠道按附件发送。
 
 ## 安装
 
-环境要求：**Linux + X11 图形会话**（开发环境为 Linux；Windows/macOS 未适配）、**Node.js 18+**；飞书/HTTP 渠道的总结 docx 附件依赖 **pandoc**（未安装时自动回退纯文本，不影响其他功能）。
+环境要求：**Linux + X11 图形会话**（开发环境为 Linux；Windows/macOS 未适配）、**Node.js 18+**；HTTP 渠道的总结 docx 附件依赖 **pandoc**（未安装时自动回退纯文本，不影响其他功能）。
 
 ```bash
 git clone https://github.com/sundanan/ai-roundtable.git
 cd ai-roundtable
-bash install.sh      # 检查环境 → npm install → 生成 .env 模板
+bash install.sh      # 检查环境 → npm install
 ```
 
 Electron 需要显示环境（窗口与 webview 必须真实渲染），无头服务器不适用。
@@ -48,9 +47,7 @@ Electron 需要显示环境（窗口与 webview 必须真实渲染），无头�
 ## 配置
 
 1. **登录各家账号**：`npm start` 启动后，单击第二排每个模型按钮进入全屏，手动登录一次；
-2. **总结方式**：默认**网页总结**——点「总结」后首次会全屏展开 DeepSeek 页面，手动登录一个第二账号即可（免费、无需 API Key）；如需 **API 总结**，在「设置」勾选「API 总结」并填任意 OpenAI 兼容 API 的 Base URL / API Key / 模型名。配置只存本机 localStorage；
-3. **飞书入口（可选）**：在 [飞书开放平台](https://open.feishu.cn) 创建企业自建应用，开通机器人能力，事件订阅选「长连接」模式并订阅 `im.message.receive_v1`，然后把 App ID/Secret 填入 `.env`（参照 `.env.example`）。不配置飞书不影响桌面端与 HTTP 接口。
-   可选在 `.env` 配 `FEISHU_ALLOW_CHAT_IDS`（逗号分隔 chat_id 白名单，防陌生人/无关群消耗账号额度）；群消息无论是否在名单内都必须 @机器人 才触发。
+2. **总结方式**：默认**网页总结**——点「总结」后首次会全屏展开 DeepSeek 页面，手动登录一个第二账号即可（免费、无需 API Key）；如需 **API 总结**，在「设置」勾选「API 总结」——默认已指向智谱免费模型 GLM-4.7-Flash（`https://open.bigmodel.cn/api/paas/v4` + `glm-4.7-flash`），只需填你自己的 API Key，也可改填任意 OpenAI 兼容接口。配置只存本机 localStorage。
 
 ## 运行
 
@@ -90,12 +87,12 @@ curl -sS --max-time 460 -X POST http://127.0.0.1:8765/ask \
 2. `node scripts/cdp-verify.js` 跑一轮自检，看哪家 state 异常；
 3. 通过 CDP 连进对应 webview 查真实 DOM，更新对应选择器。
 
-历年踩坑与对策（陈旧回复、思考前奏误判、长答案分块截断等）见 `docs/交付说明.md` 坑表；飞书桥接设计见 `docs/飞书桥接技术方案.md`。
+历年踩坑与对策（陈旧回复、思考前奏误判、长答案分块截断等）见 `docs/交付说明.md` 坑表。
 
 ## 安全说明
 
 - HTTP 接口**仅绑定 127.0.0.1**，不暴露到网络；
-- 凭证只存 `.env`（已 gitignore），源码不含任何硬编码密钥；
+- API Key 等凭证只存本机 localStorage，源码不含任何硬编码密钥；
 - Electron 启用 `contextIsolation`、禁用 `nodeIntegration`，渲染页带 CSP；
 - webview 内外链一律经主进程白名单校验后交系统浏览器打开。
 

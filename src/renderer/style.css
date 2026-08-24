@@ -135,7 +135,7 @@ button.icon-text-btn { padding: 9px 14px; }
 /* ---------- 第二层：子集控制 + 各家按钮 ---------- */
 #model-bar {
   display: flex;
-  align-items: stretch; /* 高度可被横向分隔条拖大，按钮随之撑满 */
+  align-items: stretch;
   gap: 10px;
   padding: 5px 14px;
   background: var(--bg);
@@ -301,7 +301,7 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 #divider:hover { background: var(--accent); opacity: 0.5; }
 
-/* 模型栏与输出区之间的横向可拖拽分隔条（调整模型栏高度） */
+/* 模型栏与输出区之间的横向可拖拽分隔条（拖动调整顶部输入框高度，模型按钮高度不变） */
 #h-divider {
   flex: 0 0 6px;
   cursor: row-resize;
