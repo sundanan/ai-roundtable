@@ -553,6 +553,16 @@ function buildScrapeScript(adapter, question) {
         document.body.appendChild(holder);
         try {
           text = clone.innerText.trim();
+          // 兜底：个别站点（2026-08-24 千问 qk-markdown 实测）克隆脱离原布局上下文后
+          // innerText 返回空串，而 textContent 正常——此时退回 textContent，
+          // 并给块级标签补换行，尽量保留段落结构（innerText 正常时此分支不触发）。
+          if (text.length < 2 && (clone.textContent || '').trim().length >= 2) {
+            try {
+              var blocks = clone.querySelectorAll('p,div,li,tr,br,h1,h2,h3,h4,h5,h6,pre,section,article');
+              for (var bb = 0; bb < blocks.length; bb++) blocks[bb].insertAdjacentText('afterend', '\\n');
+            } catch (e2) {}
+            text = clone.textContent.replace(/[ \\t]+/g, ' ').trim();
+          }
         } finally {
           holder.remove();
         }
