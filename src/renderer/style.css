@@ -10,6 +10,44 @@
   --ok: #3ecf8e;
   --warn: #f5b342;
   --err: #f26d6d;
+  /* V4：主题相关派生值（原散落的硬编码 rgba/阴影统一收敛，深浅主题各自覆盖） */
+  --accent-faint: rgba(79, 124, 255, 0.08);
+  --accent-soft: rgba(79, 124, 255, 0.12);
+  --ok-soft: rgba(62, 207, 142, 0.12);
+  --warn-soft: rgba(245, 179, 66, 0.12);
+  --err-soft: rgba(242, 109, 109, 0.12);
+  --dim-soft: rgba(154, 163, 184, 0.12);
+  --strong: #ffffff;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 3px 8px rgba(0, 0, 0, 0.35);
+  --mask: rgba(0, 0, 0, 0.55);
+  --skel: rgba(154, 163, 184, 0.14);
+}
+
+/* V4：浅色主题（设置里可切换「浅色」，或「跟随系统」且系统为浅色时由 JS 打上） */
+:root[data-theme="light"] {
+  --bg: #f3f4f8;
+  --bg-panel: #ffffff;
+  --bg-header: #eceef4;
+  --border: #d8dde7;
+  --text: #1d2433;
+  --text-dim: #626e85;
+  --accent: #3a63d8;
+  --accent-hover: #2e54c0;
+  --ok: #188a5c;
+  --warn: #b87700;
+  --err: #cf4b4b;
+  --accent-faint: rgba(58, 99, 216, 0.08);
+  --accent-soft: rgba(58, 99, 216, 0.12);
+  --ok-soft: rgba(24, 138, 92, 0.12);
+  --warn-soft: rgba(184, 119, 0, 0.12);
+  --err-soft: rgba(207, 75, 75, 0.12);
+  --dim-soft: rgba(98, 110, 133, 0.14);
+  --strong: #10141f;
+  --shadow-card: 0 1px 3px rgba(16, 24, 40, 0.12);
+  --shadow-card-hover: 0 3px 8px rgba(16, 24, 40, 0.18);
+  --mask: rgba(15, 20, 32, 0.45);
+  --skel: rgba(98, 110, 133, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -87,7 +125,7 @@ body {
   line-height: 1;
   color: var(--text-dim);
 }
-#new-btn:hover { color: var(--accent); background: rgba(79, 124, 255, 0.08); }
+#new-btn:hover { color: var(--accent); background: var(--accent-faint); }
 #new-btn:focus { outline: none; }
 
 /* 发送/总结/设置/历史：发送占左侧两行高（主行动），总结横跨右上，设置/历史右下两小格 */
@@ -103,6 +141,16 @@ body {
   white-space: nowrap;
 }
 #send-btn { grid-row: 1 / 3; grid-column: 1; font-weight: 600; }
+/* 停止按钮：仅在轮次进行中显示，出现时「总结」让出一列（相邻兄弟选择器） */
+#stop-btn {
+  grid-row: 1;
+  grid-column: 2;
+  color: var(--err);
+  border-color: var(--err);
+  font-weight: 600;
+}
+#stop-btn:hover { background: var(--err-soft); border-color: var(--err); }
+#stop-btn:not([hidden]) + #summarize-btn { grid-column: 3; }
 #summarize-btn { grid-row: 1; grid-column: 2 / 4; }
 #settings-btn { grid-row: 2; grid-column: 2; }
 #history-btn { grid-row: 2; grid-column: 3; }
@@ -114,6 +162,25 @@ body {
   color: #fff;
 }
 #send-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* I6：轮次进行中--按钮带小进度环与实时计数（busy-label 由 updateProgress 刷新） */
+#send-btn.busy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  opacity: 0.9;
+  cursor: progress;
+}
+.btn-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  animation: rt-spin 0.8s linear infinite;
+}
+@keyframes rt-spin { to { transform: rotate(360deg); } }
 
 button {
   padding: 9px 16px;
@@ -161,12 +228,26 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 .subset-count:hover { color: var(--accent); }
 
+/* 模型栏作为容器查询基准：9 列始终均分、不出滚动条，
+   宽度不足时名称字号逐级缩小，极窄时只留 logo 图标 */
+#model-bar { container-type: inline-size; }
+
 #model-grid {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 8px;
   flex: 1;
   min-width: 0;
+}
+@container (max-width: 920px) {
+  .model-btn .model-name { font-size: 12px; }
+}
+@container (max-width: 800px) {
+  .model-btn .model-name { font-size: 11px; }
+  .model-btn { gap: 5px; padding: 8px 2px; }
+}
+@container (max-width: 680px) {
+  .model-btn .model-name { display: none; }
 }
 
 /* 模型按钮：品牌徽章 + 名称。单击=全屏打开该网页；是否参与本轮在「设置」勾选 */
@@ -188,27 +269,29 @@ button.icon-text-btn { padding: 9px 14px; }
 /* 边框只表达选中态：选中=主色蓝框 + 微蓝底；未选中=灰框 + 整体变暗 */
 .model-btn.checked {
   border-color: var(--accent);
-  background: rgba(79, 124, 255, 0.08);
+  background: var(--accent-faint);
 }
 .model-btn.unchecked { opacity: 0.6; }
 
 /* 网页加载状态挪到右上角小圆点：绿=就绪，橙=加载中，红=失败（与边框语义分离） */
+/* 网页加载状态圆点：只在异常时显示（橙=加载中、红=加载失败）；
+   绿色"就绪"启动后几乎永远常亮、信息量低，不再显示（状态文字仍在按钮 tooltip 里） */
 .model-status {
+  display: none;
   position: absolute;
   top: 4px;
   right: 4px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--text-dim);
-  opacity: 0.5;
 }
-.model-status.ready { background: var(--ok); opacity: 1; }
-.model-status.loading { background: var(--warn); opacity: 1; }
-.model-status.error { background: var(--err); opacity: 1; }
+.model-status.loading { display: block; background: var(--warn); }
+.model-status.error { display: block; background: var(--err); }
 
-/* 品牌徽章：各家品牌色圆角方块 + 首字符，便于一眼区分 */
+/* 品牌徽章：各家官方 logo（V3，assets/logos/<id>.png）；素材缺失时回退
+   品牌色圆角方块 + 首字符（has-logo 未打上时的样子） */
 .model-badge {
+  position: relative;
   width: 20px;
   height: 20px;
   border-radius: 6px;
@@ -219,7 +302,16 @@ button.icon-text-btn { padding: 9px 14px; }
   font-weight: 600;
   color: #fff;
   flex: 0 0 auto;
+  overflow: hidden;
 }
+.model-badge .badge-logo {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.model-badge.has-logo .badge-logo { display: block; }
+.model-badge.has-logo { background: transparent !important; font-size: 0; }
 
 /* 名称文字本体：字号收窄保证 8 家全名一行展示 */
 .model-name {
@@ -284,11 +376,48 @@ button.icon-text-btn { padding: 9px 14px; }
   50% { opacity: 0.55; }
 }
 
+/* ---------- V6：动效收尾 ---------- */
+/* 回复行出现：淡入上移（每轮广播重显行时触发一次，内容刷新不重播） */
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.row { animation: row-in 0.25s ease-out; }
+
+/* 总结落定：生成完成时正文轻微下沉就位 */
+@keyframes settle-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.summary-body .reading-col.settle { animation: settle-in 0.4s ease-out; }
+
+/* 按压反馈：所有可点元素按下时轻微缩小 */
+button:active,
+.model-btn:active {
+  transform: scale(0.98);
+}
+
 .output-cols {
   flex: 1;
   min-height: 0;
   display: flex;
   gap: 12px;
+}
+
+/* V2：窄屏（<1024px 逻辑宽）输出区改为上下堆叠--左栏固定宽度在窄屏很局促；
+   左右分隔条无意义，隐藏之。断点取 1024 而非 1200：主屏逻辑宽 1080（2160 物理
+   ÷2 dpr），1200 断点会让主屏常态即堆叠，行高被压没 */
+@media (max-width: 1023px) {
+  .output-cols {
+    flex-direction: column;
+    gap: 10px;
+  }
+  #divider { display: none; }
+  /* 堆叠模式下左栏（各行）占上方约 45%，其余给总结；行内滚动仍被禁用（均分布） */
+  #rows {
+    flex: 0 0 45%;
+    min-height: 0;
+  }
 }
 
 /* 左右可拖拽分隔条 */
@@ -313,33 +442,35 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 #h-divider:hover { background: var(--accent); }
 
-/* 左列：一行一家，固定紧凑行高（家名行 + 1 行回复预览），8 家一屏放下、超出纵向滚动 */
+/* 左列：一行一家。均分布局（V-rows）：9 行按剩余空间等分填满、行内不滚动--
+   行高随窗口自适应，字号相应收小，任何窗口尺寸下都不出现滚动条 */
 #rows {
   flex: 0 0 46%;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden; /* 永不出滚动条：内容超出由行内裁剪吸收 */
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .row {
-  flex: 0 0 auto;
+  flex: 1 1 0;      /* 均分：每行占剩余空间的 1/N */
+  min-height: 0;    /* 允许压缩（极矮窗口下行头优先保留） */
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   cursor: pointer;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s, flex-grow 0.2s ease-out;
 }
 .row:hover {
   border-color: var(--accent);
   transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-card-hover);
 }
 /* 失败行：整行红边常显（最需要行动的时刻要最显眼），hover 不再变蓝 */
 .row.failed,
@@ -349,28 +480,29 @@ button.icon-text-btn { padding: 9px 14px; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 12px;
+  padding: 2px 10px;
   flex: 0 0 auto;
+  min-height: 22px;
 }
 
-.row-name { font-weight: 600; }
+.row-name { font-weight: 600; font-size: 12px; line-height: 1.2; }
 
 /* 状态胶囊：默认灰，发送中蓝、生成中橙、完成绿、失败红，一色一阶段；
    文字只保留短状态，操作引导放 tooltip */
 .row-state {
   margin-left: auto;
   flex: 0 0 auto;
-  padding: 2px 10px;
+  padding: 1px 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-dim);
-  background: rgba(154, 163, 184, 0.12);
+  background: var(--dim-soft);
   white-space: nowrap;
 }
-.row-state.info { color: var(--accent-hover); background: rgba(79, 124, 255, 0.12); }
-.row-state.ok { color: var(--ok); background: rgba(62, 207, 142, 0.12); }
-.row-state.warn { color: var(--warn); background: rgba(245, 179, 66, 0.12); }
-.row-state.err { color: var(--err); background: rgba(242, 109, 109, 0.12); }
+.row-state.info { color: var(--accent-hover); background: var(--accent-soft); }
+.row-state.ok { color: var(--ok); background: var(--ok-soft); }
+.row-state.warn { color: var(--warn); background: var(--warn-soft); }
+.row-state.err { color: var(--err); background: var(--err-soft); }
 
 /* 单家重发：平时是小 ↻；失败时实心红「↻ 重发」放大显示 */
 .row-resend.urgent {
@@ -381,16 +513,68 @@ button.icon-text-btn { padding: 9px 14px; }
   font-size: 12px;
 }
 
-.row-caret { color: var(--text-dim); font-size: 11px; }
+/* ---------- V5：错误状态视觉分级 ----------
+   失败不再是清一色红边：按"该做什么"分三档--
+   风控(橙🛡 需人工，行内给「去验证」) / 超时(蓝⏱ 可重试) / 发送失败(红⚠ 默认) */
+.row.failed.errcat-risk,
+.row.failed.errcat-risk:hover { border-color: var(--warn); }
+.row.failed.errcat-timeout,
+.row.failed.errcat-timeout:hover { border-color: var(--accent); }
+.row.failed.errcat-risk .row-state { color: var(--warn); background: var(--warn-soft); }
+.row.failed.errcat-timeout .row-state { color: var(--accent-hover); background: var(--accent-soft); }
+.row.failed.errcat-risk .row-body { color: var(--warn); }
 
-/* 回复预览：固定一行、溢出省略号，保持 8 行高度一致；全文点行跳转总结附录 */
-.row-body {
-  flex: 0 0 auto;
-  padding: 0 12px 3px;
-  font-size: 12px;
+/* I3：「去验证」按钮（仅风控行出现） */
+.row-verify {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #fff;
+  padding: 3px 10px;
+  font-size: 11px;
   white-space: nowrap;
+}
+.row-verify:hover { border-color: var(--warn); filter: brightness(1.1); }
+
+.row-caret { color: var(--text-dim); font-size: 10px; transition: transform 0.15s; }
+/* I2：展开态--caret 转向、行占约 3 倍空间（其余行自动压缩，仍不出滚动条） */
+.row.expanded .row-caret { transform: rotate(90deg); }
+.row.expanded { flex: 3.4 1 0; border-color: var(--accent); }
+
+/* I2：展开的全文区（Markdown 渲染；长文只在展开区内滚动） */
+.row-full {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 10px 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  scrollbar-width: thin;
+  cursor: auto;
+}
+.row-full.empty { color: var(--text-dim); white-space: pre-wrap; }
+.row-full .md h1, .row-full .md h2, .row-full .md h3 { margin: 8px 0 4px; font-size: 13px; }
+.row-full .md p { margin: 4px 0; }
+.row-full .md ul, .row-full .md ol { margin: 4px 0; padding-left: 18px; }
+.row-full .row-jump {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--accent-hover);
+  background: transparent;
+  border-color: var(--border);
+}
+
+/* 回复预览：占满行内剩余高度、最多 3 行自适应（行高时多显、矮时少显），
+   超出行高裁剪且不出滚动条；点击整行展开全文（I2） */
+.row-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 10px 3px;
+  font-size: 11.5px;
+  line-height: 1.4;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 .row-body.placeholder { color: var(--text-dim); }
 .row-body.error { color: var(--err); }
@@ -404,7 +588,7 @@ button.icon-text-btn { padding: 9px 14px; }
   background: var(--bg-panel);
   border: 1px solid var(--accent);
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
@@ -426,7 +610,7 @@ button.icon-text-btn { padding: 9px 14px; }
 
 /* 「📋 总结」标题可点击：全屏展开 DeepSeek 总结账号页面（手动登录第二账号入口） */
 #summary-title { cursor: pointer; border-radius: 6px; padding: 2px 6px; margin-left: -6px; }
-#summary-title:hover { background: rgba(154, 163, 184, 0.16); }
+#summary-title:hover { background: var(--dim-soft); }
 
 .card-state.ok { color: var(--ok); }
 .card-state.warn { color: var(--warn); }
@@ -437,11 +621,20 @@ button.icon-text-btn { padding: 9px 14px; }
   min-height: 0;
   min-width: 0; /* 横向 flex 下允许收缩，长内容不顶破目录侧栏 */
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 14px 18px;
   white-space: pre-wrap;
   word-break: break-word;
+  /* V1：长文阅读排版升级--正文 15px / 行高 1.75 */
+  font-size: 15px;
+  line-height: 1.75;
 }
-.summary-body.placeholder { color: var(--text-dim); }
+/* V1：阅读行宽限位（~46em 居中），由渲染时统一包 .reading-col；
+   空态骨架屏同样走限位，视觉一致 */
+.summary-body .reading-col {
+  max-width: 46em;
+  margin: 0 auto;
+}
+.summary-body.placeholder { color: var(--text-dim); white-space: normal; }
 .summary-body.error { color: var(--err); }
 
 /* 目录标签：纵向排列在总结内容左侧（五部分 + 分隔线 + 附录各家，点击平滑跳转） */
@@ -478,7 +671,7 @@ button.icon-text-btn { padding: 9px 14px; }
 }
 .toc-chip:hover { border-color: var(--accent); color: var(--accent); }
 /* 左侧家名行点击跳转时，对应目录标签短暂高亮 */
-.toc-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(79, 124, 255, 0.12); }
+.toc-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .toc-chip .toc-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .toc-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 /* 「各家意见」可展开分组：一级标签 + 缩进的 8 家二级标签 */
@@ -495,7 +688,7 @@ button.icon-text-btn { padding: 9px 14px; }
 .toc-sub[hidden] { display: none; }
 .toc-subchip { padding: 2px 8px; }
 /* 跳转锚点留出顶部间距，避免贴边 */
-.summary-body > * { scroll-margin-top: 10px; }
+.summary-body .reading-col > * { scroll-margin-top: 10px; }
 
 /* Markdown 排版（总结面板 / 回复行 / 历史详情共用，容器加 .md 类） */
 .md { white-space: normal; }
@@ -513,7 +706,7 @@ button.icon-text-btn { padding: 9px 14px; }
   padding-left: 22px;
 }
 .md li { margin: 3px 0; }
-.md strong { color: #fff; }
+.md strong { color: var(--strong); }
 .md code {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -646,7 +839,7 @@ button.icon-text-btn { padding: 9px 14px; }
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--mask);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -682,7 +875,7 @@ button.icon-text-btn { padding: 9px 14px; }
 .modal-close:hover {
   border: none;
   color: var(--text);
-  background: rgba(154, 163, 184, 0.12);
+  background: var(--dim-soft);
 }
 
 .modal h2 { margin: 0 0 16px; font-size: 16px; }
@@ -805,27 +998,47 @@ button.icon-text-btn { padding: 9px 14px; }
 /* 选中网页总结时 API 配置区置灰（保留为备选，不隐藏） */
 #cfg-api-fields.cfg-api-off { opacity: 0.45; }
 
-/* ---------- 总结面板空态：骨架屏式五段结构预览 ---------- */
-.skel-sec { margin-bottom: 14px; }
-.skel-title {
+/* 总结失败提示内的「去登录」按钮 */
+.sum-login-btn {
+  margin-top: 10px;
+  padding: 6px 18px;
+  color: var(--accent-hover);
+  border-color: var(--accent);
+  white-space: nowrap;
+}
+
+/* ---------- 总结模型下拉：与「网页总结」同一行 ---------- */
+.cfg-sum-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cfg-sum-line select {
+  flex: 1;
+  min-width: 120px;
+  max-width: 240px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.cfg-sum-line select:focus { border-color: var(--accent); }
+/* 重叠确认弹窗（保存时触发） */
+.modal-sm { width: 520px; }
+.modal-body-text { line-height: 1.7; color: var(--text); margin: 0 0 8px; }
+
+/* ---------- 总结面板空态：紧凑全篇示意（一级标题不空行） ---------- */
+.skel-outline { color: var(--text-dim); }
+.skel-line {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-dim);
-  margin-bottom: 6px;
+  line-height: 1.5;
   padding-left: 10px;
   border-left: 3px solid var(--border);
 }
-.skel-bar {
-  height: 10px;
-  border-radius: 5px;
-  background: rgba(154, 163, 184, 0.14);
-  margin: 6px 0 6px 13px;
-  animation: rt-pulse 1.6s ease-in-out infinite;
-}
-.skel-bar.w60 { width: 60%; }
-.skel-bar.w80 { width: 80%; }
+.skel-line.dim { font-weight: 400; opacity: 0.7; }
 .skel-hint {
-  margin-top: 18px;
+  margin-top: 14px;
   text-align: center;
   font-size: 13px;
   color: var(--text-dim);
@@ -862,12 +1075,19 @@ button.icon-text-btn { padding: 9px 14px; }
   cursor: pointer;
 }
 .cfg-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
   flex: 0 0 auto;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
+/* V3：设置勾选区同样显示官方 logo，加载失败回退品牌色圆点 */
+.cfg-dot .badge-logo { display: none; width: 100%; height: 100%; object-fit: contain; }
+.cfg-dot.has-logo { background: transparent !important; }
+.cfg-dot.has-logo .badge-logo { display: block; }
 
 /* ---------- 设置弹窗：左右双栏 ---------- */
 .cfg-cols {
@@ -887,3 +1107,35 @@ button.icon-text-btn { padding: 9px 14px; }
   color: var(--text-dim);
   background: transparent;
 }
+
+/* ---------- I7：首次使用轻引导（一次性气泡） ---------- */
+.guide-bubble {
+  position: fixed;
+  top: 132px; /* 输入框 + 模型栏之下，居中悬浮 */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 480px;
+  max-width: 92vw;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card-hover);
+  padding: 14px 16px;
+  z-index: 90; /* 高于常规内容、低于设置/历史弹窗(100) */
+  animation: row-in 0.3s ease-out;
+}
+.guide-title { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
+.guide-steps { margin: 0; padding-left: 18px; }
+.guide-steps li { margin: 6px 0; font-size: 13px; line-height: 1.65; color: var(--text); }
+.guide-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.guide-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.guide-close:hover { color: var(--text); background: var(--dim-soft); }

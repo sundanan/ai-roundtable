@@ -16,6 +16,7 @@
         placeholder="输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）"></textarea>
       <div class="composer-actions">
         <button id="send-btn" title="发送到勾选各家（Ctrl+Enter）">发送</button>
+        <button id="stop-btn" hidden title="停止本轮：中断等待与轮询，已交卷的回复保留">停止</button>
         <button id="summarize-btn" class="primary" title="生成圆桌总结（方式见设置）" disabled>总结</button>
         <button id="settings-btn" title="总结模型设置">设置</button>
         <button id="history-btn" title="历史记录">历史</button>
@@ -47,6 +48,7 @@
         <div class="summary-head">
           <span id="summary-title" title="点开 DeepSeek 总结账号页面（手动登录第二账号用）">📋 总结</span>
           <span class="summary-actions">
+            <button id="sum-account-btn" class="mini" title="全屏打开总结账号页面（登录/查看）">账号</button>
             <button id="summary-copy" class="mini" title="复制总结全文">复制</button>
             <button id="summary-save" class="mini" title="保存总结为 Markdown 文件">存为 MD</button>
             <button id="summary-top" class="mini" title="回到顶部">↑ 顶部</button>
@@ -64,32 +66,9 @@
             <span class="toc-sep"></span>
             <span class="toc-chip toc-static">各家意见</span>
           </div>
-          <!-- 空态：骨架屏式五段结构预览，总结生成后由 JS 整体替换 -->
-          <div id="summary-body" class="summary-body md placeholder">
-            <div class="skel-sec">
-              <div class="skel-title">一、主要共识</div>
-              <div class="skel-bar"></div>
-              <div class="skel-bar w80"></div>
-            </div>
-            <div class="skel-sec">
-              <div class="skel-title">二、次要共识</div>
-              <div class="skel-bar w80"></div>
-            </div>
-            <div class="skel-sec">
-              <div class="skel-title">三、分歧观点</div>
-              <div class="skel-bar w60"></div>
-            </div>
-            <div class="skel-sec">
-              <div class="skel-title">四、个性观点</div>
-              <div class="skel-bar w80"></div>
-            </div>
-            <div class="skel-sec">
-              <div class="skel-title">五、综合意见</div>
-              <div class="skel-bar"></div>
-              <div class="skel-bar w60"></div>
-            </div>
-            <div class="skel-hint">各家回答完毕后，点击「总结」生成五段圆桌总结</div>
-          </div>
+          <!-- 空态：紧凑全篇示意（一级标题不空行），总结生成后由 JS 整体替换。
+               注意标签间不留空白文本节点：pre-wrap 下缩进换行会被渲染成空行 -->
+          <div id="summary-body" class="summary-body placeholder"><div class="reading-col"><div class="skel-outline"><div class="skel-line">一、主要共识</div><div class="skel-line">二、次要共识</div><div class="skel-line">三、分歧观点</div><div class="skel-line">四、个性观点</div><div class="skel-line">五、综合意见</div><div class="skel-line dim">附录：各家意见</div></div><div class="skel-hint">各家回答完毕后，点击「总结」生成五段圆桌总结</div></div></div>
         </div>
       </div>
     </div>
@@ -107,13 +86,14 @@
         <div class="cfg-col">
           <div class="cfg-section-title">总结方式</div>
           <div class="cfg-mode">
-            <label class="cfg-check">
+            <label class="cfg-check cfg-sum-line">
               <input type="radio" name="cfg-summary-mode" id="cfg-mode-web" checked>
-              网页总结 · DeepSeek 第二账号（免费，免 API Key）
+              网页总结
+              <select id="cfg-sum-model" title="网页总结用哪一家生成五段总结（仅列出可在对话框上传文件的模型，附件可突破字数限制完整输入）"></select>
             </label>
             <label class="cfg-check">
               <input type="radio" name="cfg-summary-mode" id="cfg-mode-api">
-              API 总结 · OpenAI 兼容接口（备选）
+              API 总结 · OpenAI 兼容接口
             </label>
           </div>
           <div id="cfg-api-fields">
@@ -128,19 +108,36 @@
             </label>
           </div>
           <label class="cfg-check">
-            <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结（桌面端）
+            <input id="cfg-autosummary" type="checkbox"> 全部交卷后自动总结
           </label>
-          <p class="modal-tip">网页总结首次使用需在全屏页面手动登录第二个 DeepSeek 账号；API 配置仅保存在本机（localStorage）。</p>
+          <p class="modal-tip">网页总结首次使用需在全屏页面手动登录总结专用账号；API 配置仅保存在本机。</p>
         </div>
         <div class="cfg-col">
           <div class="cfg-section-title">
-            <span>参与各家（模型按钮单击=全屏打开）</span>
+            <span>参与各家</span>
             <span class="cfg-mini-actions">
               <button id="cfg-sel-all" class="mini">全选</button>
               <button id="cfg-sel-none" class="mini">清空</button>
             </span>
           </div>
           <div id="cfg-models" class="cfg-models"></div>
+          <div class="cfg-section">
+            <div class="cfg-section-title">界面主题</div>
+            <div class="cfg-mode">
+              <label class="cfg-check">
+                <input type="radio" name="cfg-theme" id="cfg-theme-auto" checked>
+                跟随系统
+              </label>
+              <label class="cfg-check">
+                <input type="radio" name="cfg-theme" id="cfg-theme-dark">
+                深色
+              </label>
+              <label class="cfg-check">
+                <input type="radio" name="cfg-theme" id="cfg-theme-light">
+                浅色
+              </label>
+            </div>
+          </div>
           <div class="cfg-section">
             <div class="cfg-section-title">发送快捷键</div>
             <div class="cfg-mode">
@@ -183,6 +180,18 @@
       </div>
       <div class="modal-actions">
         <button id="history-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 总结模型与回答模型重叠确认弹窗（保存时触发） -->
+  <div id="sum-overlap-modal" class="modal-mask" hidden>
+    <div class="modal modal-sm">
+      <h2>总结模型与回答模型重叠</h2>
+      <p id="sum-overlap-text" class="modal-body-text"></p>
+      <div class="modal-actions">
+        <button id="sum-overlap-cancel">返回调整</button>
+        <button id="sum-overlap-ok" class="primary">仍这样保存</button>
       </div>
     </div>
   </div>

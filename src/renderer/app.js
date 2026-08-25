@@ -5,6 +5,12 @@
 //         row, state: idle|sending|generating|done|error, lastText, stableCount, reply }
 const panels = new Map();
 
+// 总结模型白名单：仅「网页对话框可直接上传文件」的模型（附件 docx/md 可突破
+// 输入框字数限制，完整输入 9 家原文）。2026-08-25 实测：DeepSeek/MiMo 接受
+// docx/doc/md；其余家无现成文件框（回退文本模式每家截断 2000 字）或仅接受图片。
+// 注意必须声明在使用之前：rebuildSummarizerPanel() 在文件头部即会取该名单。
+const SUM_MODEL_ALLOWED = ['deepseek', 'mimo'];
+
 const dock = document.getElementById('dock');
 const modelGrid = document.getElementById('model-grid');
 const rowsEl = document.getElementById('rows');
@@ -14,7 +20,7 @@ const subsetCountEl = document.getElementById('subset-count');
 
 // ================= webview 面板（dock 隐藏层 + 全屏浮层） =================
 function focusPanel(id) {
-  const p = panels.get(id) || (id === SUMMARIZER.id ? summarizerPanel : null);
+  const p = panels.get(id) || (id === 'summarizer' ? summarizerPanel : null);
   if (!p) return;
   p.panelEl.classList.add('focused');
   dock.classList.add('active');
@@ -24,6 +30,7 @@ function unfocusPanel() {
   const focused = document.querySelector('.webview-panel.focused');
   if (focused) focused.classList.remove('focused');
   dock.classList.remove('active');
+  scheduleVerifyResends(); // I3：从「去验证」全屏返回 -> 自动补发该家
 }
 
 document.addEventListener('keydown', (e) => {
@@ -31,7 +38,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // 模型按钮栅格按适配器数量 N 等分（7→8 家时无需改 CSS）
-modelGrid.style.gridTemplateColumns = `repeat(${ADAPTERS.length}, 1fr)`;
+modelGrid.style.gridTemplateColumns = `repeat(${ADAPTERS.length}, 1fr)`; // 9 列均分，窄屏由容器查询缩字号/只留 logo
 
 // 各家品牌色（徽章底色，近似值；未列出的用主色兜底）
 const BRAND_COLORS = {
@@ -45,6 +52,18 @@ const BRAND_COLORS = {
   wenxin: '#2932e1',
   mimo: '#ff6900',
 };
+
+// V3：徽章内嵌官方 logo（assets/logos/<id>.png，64px）；加载成功后隐藏首字母
+// 兜底方案（素材缺失/文件损坏）自动回退到「品牌色方块 + 首字母」，不影响使用
+function attachBadgeLogo(badgeEl, id) {
+  const img = document.createElement('img');
+  img.className = 'badge-logo';
+  img.alt = '';
+  img.src = `../../assets/logos/${id}.png`;
+  img.onload = () => badgeEl.classList.add('has-logo');
+  img.onerror = () => img.remove();
+  badgeEl.appendChild(img);
+}
 
 for (const adapter of ADAPTERS) {
   // 面板（webview 容器）
@@ -76,26 +95,36 @@ for (const adapter of ADAPTERS) {
     `<span class="model-status"></span>`;
   barBtn.querySelector('.model-badge').style.background =
     BRAND_COLORS[adapter.id] || 'var(--accent)';
+  attachBadgeLogo(barBtn.querySelector('.model-badge'), adapter.id);
   barBtn.addEventListener('click', () => focusPanel(adapter.id));
   modelGrid.appendChild(barBtn);
 
-  // 第三层回复行（行内始终显示回复预览；点击跳转总结版块对应该家的附录锚点）
+  // 第三层回复行（行内始终显示回复预览；点击就地展开全文，I2）
   const row = document.createElement('div');
   row.className = 'row';
   row.innerHTML = `
     <div class="row-head">
       <span class="row-name">${adapter.name}</span>
       <span class="row-state">待发送</span>
+      <button class="mini row-verify" hidden title="全屏打开该家完成登录/验证，回来后自动补发">🛡 去验证</button>
       <button class="mini row-resend" title="仅重发该家（不影响其他家）">↻</button>
       <span class="row-caret">›</span>
     </div>
     <div class="row-body placeholder">尚未发送</div>
+    <div class="row-full" hidden></div>
   `;
-  row.addEventListener('click', () => jumpToSummaryFamily(adapter.name));
+  row.addEventListener('click', () => toggleRowExpand(entry));
   // 单家补发：只重发该家，阻止冒泡避免触发行点击跳转
   row.querySelector('.row-resend').addEventListener('click', (e) => {
     e.stopPropagation();
     resendPanel(adapter.id);
+  });
+  // I3：风控行「去验证」--全屏该家完成登录/验证，收起面板后自动补发一次
+  row.querySelector('.row-verify').addEventListener('click', (e) => {
+    e.stopPropagation();
+    entry.pendingVerifyResend = true;
+    setCardState(entry, '🛡 去验证中…', 'warn');
+    focusPanel(adapter.id);
   });
   rowsEl.appendChild(row);
 
@@ -110,7 +139,10 @@ for (const adapter of ADAPTERS) {
     statusEl: panelEl.querySelector('.panel-status'),
     rowStateEl: row.querySelector('.row-state'),
     rowResendBtn: row.querySelector('.row-resend'),
+    rowVerifyBtn: row.querySelector('.row-verify'),
     rowBodyEl: row.querySelector('.row-body'),
+    rowFullEl: row.querySelector('.row-full'),
+    rowCaretEl: row.querySelector('.row-caret'),
     state: 'idle',
     lastText: '',
     stableCount: 0,
@@ -124,6 +156,11 @@ for (const adapter of ADAPTERS) {
   webview.addEventListener('did-start-loading', () => setDots(entry, 'loading'));
   webview.addEventListener('did-finish-load', () => setDots(entry, 'ready'));
   webview.addEventListener('dom-ready', () => setDots(entry, 'ready'));
+  // 任何加载序列结束都会触发 did-stop-loading：SPA 站内路由/子帧活动会反复触发
+  // did-start-loading 却不一定伴随 did-finish-load/dom-ready，曾导致橙点常挂不灭
+  webview.addEventListener('did-stop-loading', () => {
+    if (entry.dot.className !== 'dot error') setDots(entry, 'ready');
+  });
   webview.addEventListener('did-fail-load', (e) => {
     setDots(entry, 'error');
     setStatus(entry.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
@@ -132,46 +169,83 @@ for (const adapter of ADAPTERS) {
   panels.set(adapter.id, entry);
 }
 
-// ================= 总结者面板（DeepSeek 第二账号；仅驻留 dock，不参与广播）=================
-// 独立分区 persist:deepseek-sum：与参与回答的 deepseek 面板同时登录不同账号，会话完全隔离。
-// 点「总结」走网页总结时被全屏展开（focusPanel），首次使用需用户手动登录第二账号。
+// ================= 总结者面板（总结专用账号；仅驻留 dock，不参与广播） =================
+// 总结模型可在「设置」里选择（默认 DeepSeek）：每家独立分区 persist:<id>-sum，
+// 与同站参与回答的面板会话完全隔离（可登录两个账号）。点「总结」走网页总结时被
+// 全屏展开（focusPanel('summarizer')），首次使用需用户手动登录总结专用账号。
+function getSummarizerSiteId() {
+  const saved = localStorage.getItem('rt_summarizer');
+  return SUM_MODEL_ALLOWED.includes(saved) ? saved : 'deepseek'; // 非白名单回退 DeepSeek
+}
+
+// 总结模型配置：DeepSeek 用 SUMMARIZER 的增强配置（附件上传候选/思考块剪枝），
+// 其余家直接沿用各自回答条目的选择器配置
+function getSummarizerAdapter() {
+  const siteId = getSummarizerSiteId();
+  return siteId === 'deepseek' ? SUMMARIZER : ADAPTERS.find((a) => a.id === siteId);
+}
+
 const summarizerPanel = (() => {
   const panelEl = document.createElement('div');
   panelEl.className = 'webview-panel';
   panelEl.innerHTML = `
     <div class="panel-header">
       <span class="dot"></span>
-      <span class="panel-name">${SUMMARIZER.name}</span>
-      <span class="panel-status">首次使用：请在此手动登录第二个 DeepSeek 账号</span>
+      <span class="panel-name"></span>
+      <span class="panel-status"></span>
       <button class="mini reload" title="刷新该面板">⟳</button>
       <button class="mini close-focus">✕ 关闭（Esc）</button>
     </div>
   `;
-  const webview = document.createElement('webview');
-  webview.setAttribute('src', SUMMARIZER.url);
-  webview.setAttribute('partition', `persist:${SUMMARIZER.id}`);
-  webview.setAttribute('allowpopups', '');
-  panelEl.appendChild(webview);
   dock.appendChild(panelEl);
-
   const entry = {
-    adapter: SUMMARIZER,
+    adapter: null,
     panelEl,
-    webview,
+    webview: null,
     dot: panelEl.querySelector('.dot'),
     statusEl: panelEl.querySelector('.panel-status'),
   };
-  panelEl.querySelector('.reload').addEventListener('click', () => webview.reload());
-  panelEl.querySelector('.close-focus').addEventListener('click', unfocusPanel);
-  webview.addEventListener('did-start-loading', () => (entry.dot.className = 'dot loading'));
-  webview.addEventListener('did-finish-load', () => (entry.dot.className = 'dot ready'));
-  webview.addEventListener('dom-ready', () => (entry.dot.className = 'dot ready'));
-  webview.addEventListener('did-fail-load', (e) => {
-    entry.dot.className = 'dot error';
-    setStatus(entry.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+  panelEl.querySelector('.reload').addEventListener('click', () => {
+    if (entry.webview) entry.webview.reload();
   });
+  panelEl.querySelector('.close-focus').addEventListener('click', unfocusPanel);
   return entry;
 })();
+
+// 按当前设置（重）建总结者 webview：切换总结模型时调用（旧 webview 直接移除，
+// 各家分区独立持久化，切回不丢登录态）
+function rebuildSummarizerPanel() {
+  const ad = getSummarizerAdapter();
+  const siteId = getSummarizerSiteId();
+  // 面板名用基础站点名（SUMMARIZER.name 已含「·总结」后缀，直接拼会重复）
+  const baseAd = ADAPTERS.find((a) => a.id === siteId) || ad;
+  summarizerPanel.adapter = ad;
+  summarizerPanel.panelEl.querySelector('.panel-name').textContent = `${baseAd.name}·总结`;
+  setStatus(summarizerPanel.statusEl, '首次使用：请在此手动登录总结专用账号（可与回答用同一家的不同账号）');
+  if (summarizerPanel.webview) summarizerPanel.webview.remove();
+  const webview = document.createElement('webview');
+  webview.setAttribute('src', ad.url);
+  webview.setAttribute('partition', `persist:${siteId}-sum`);
+  webview.setAttribute('allowpopups', '');
+  summarizerPanel.panelEl.appendChild(webview);
+  webview.addEventListener('did-start-loading', () => (summarizerPanel.dot.className = 'dot loading'));
+  webview.addEventListener('did-finish-load', () => (summarizerPanel.dot.className = 'dot ready'));
+  webview.addEventListener('dom-ready', () => (summarizerPanel.dot.className = 'dot ready'));
+  webview.addEventListener('did-stop-loading', () => {
+    if (summarizerPanel.dot.className !== 'dot error') summarizerPanel.dot.className = 'dot ready';
+  });
+  webview.addEventListener('did-fail-load', (e) => {
+    summarizerPanel.dot.className = 'dot error';
+    setStatus(summarizerPanel.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+  });
+  summarizerPanel.webview = webview;
+  // 标题直接显示当前总结模型（可见性），tooltip 说明点击行为
+  const titleEl = document.getElementById('summary-title');
+  titleEl.textContent = `📋 总结 · ${baseAd.name}`;
+  titleEl.title = `点开「${baseAd.name}」总结账号页面（手动登录总结专用账号用）`;
+}
+
+rebuildSummarizerPanel();
 
 const DOT_LABELS = {
   '': '未加载',
@@ -220,7 +294,9 @@ function setStatus(el, text) {
 }
 
 // 状态胶囊：只放短状态，引导语放 tooltip；失败时整行红边 + 重发按钮放大为「↻ 重发」
-function setCardState(p, text, cls) {
+// V5：失败时按 errCat 视觉分级（risk=橙🛡需人工 / timeout=蓝⏱可重试 / sendfail=红⚠），
+// 风控行额外显示「🛡 去验证」按钮（I3）
+function setCardState(p, text, cls, errCat) {
   p.rowStateEl.textContent = text;
   p.rowStateEl.className = 'row-state' + (cls ? ` ${cls}` : '');
   p.rowStateEl.title = text;
@@ -228,6 +304,38 @@ function setCardState(p, text, cls) {
   p.row.classList.toggle('failed', failed);
   p.rowResendBtn.classList.toggle('urgent', failed);
   p.rowResendBtn.textContent = failed ? '↻ 重发' : '↻';
+  // V5：错误分级样式（仅在失败态有意义；非失败时清掉残留）
+  const cat = failed ? errCat || 'sendfail' : '';
+  p.row.classList.toggle('errcat-risk', cat === 'risk');
+  p.row.classList.toggle('errcat-timeout', cat === 'timeout');
+  p.row.classList.toggle('errcat-sendfail', cat === 'sendfail');
+  // I3：仅风控（需人工）显示「去验证」
+  if (p.rowVerifyBtn) {
+    p.rowVerifyBtn.hidden = !(failed && cat === 'risk');
+    if (!(failed && cat === 'risk')) p.pendingVerifyResend = false;
+  }
+}
+
+// V5：错误分类。风控关键词直判；再探一次页面是否停在登录/验证页（风控高发期
+// 典型表现是被重定向/弹验证层，抓取端只看到"超时"）；最后才归超时/发送失败。
+const RISK_KEYWORDS = ['登录', '登入', '验证', '风控', '扫码', '拦截', '封禁', '账号', '人机', '滑块'];
+const TIMEOUT_KEYWORDS = ['未取到', '超时', 'timeout'];
+const ERR_LABELS = { risk: '🛡 需人工验证', timeout: '⏱ 超时可重试', sendfail: '⚠ 发送失败' };
+// 页面级风控探测：URL 含登录/验证路径，或标题含登录/验证字样（正文关键词易误伤，不用）
+const RISK_PROBE = `(function () {
+  var u = location.href.toLowerCase();
+  if (/login|passport|account|verify|captcha|sec\\./.test(u)) return true;
+  return /登录|登入|验证|安全/.test(document.title || '');
+})()`;
+async function detectErrorCategory(p, hintText) {
+  const t = String(hintText || '');
+  if (RISK_KEYWORDS.some((k) => t.includes(k))) return 'risk';
+  // 探测优先于超时归类：风控页常表现为"抓不到回复超时"，按关键词会漏判
+  try {
+    if (await execInPanel(p.webview, RISK_PROBE)) return 'risk';
+  } catch {}
+  if (TIMEOUT_KEYWORDS.some((k) => t.includes(k))) return 'timeout';
+  return 'sendfail';
 }
 
 // ================= 注入脚本（在 webview 内执行） =================
@@ -708,6 +816,7 @@ function waitWebviewReady(webview, timeoutMs = 45000) {
 const promptEl = document.getElementById('prompt');
 const sendBtn = document.getElementById('send-btn');
 const summarizeBtn = document.getElementById('summarize-btn');
+const stopBtn = document.getElementById('stop-btn');
 
 let currentQuestion = ''; // 本轮问题原文，抓取时用于排除"把问题当答案"
 let activeRoundIds = null; // 本轮参与面板 id 集合；null=全部（改进2 可选子集）
@@ -762,28 +871,40 @@ async function runSendTask(p, text) {
         p.rowBodyEl.className = 'row-body placeholder';
         p.rowBodyEl.textContent = '等待回复…';
       }
-      setStatus(p.statusEl, '已发送');
+      if (!roundAborted) setStatus(p.statusEl, '已发送'); // 停止后不改写「已停止」
     } else {
       p.state = 'error';
-      setStatus(p.statusEl, (res && res.error) || '注入失败');
-      setCardState(p, '发送失败', 'err');
+      const msg = (res && res.error) || '注入失败';
+      setStatus(p.statusEl, msg);
+      const cat = await detectErrorCategory(p, msg);
+      setCardState(p, ERR_LABELS[cat], 'err', cat);
       p.rowBodyEl.className = 'row-body error';
       p.rowBodyEl.textContent =
-        ((res && res.error) || '注入失败') + '。可点行尾 ↻ 仅重发该家，或全屏手动发送。';
+        msg + (cat === 'risk'
+          ? '。页面可能需要登录/验证：点「🛡 去验证」全屏处理，回来后自动补发。'
+          : '。可点行尾 ↻ 仅重发该家，或全屏手动发送。');
     }
   } catch (e) {
     p.state = 'error';
     const msg = String(e.message || e).slice(0, 60);
     setStatus(p.statusEl, `失败：${msg}`);
-    setCardState(p, '发送失败', 'err');
+    const cat = await detectErrorCategory(p, msg);
+    setCardState(p, ERR_LABELS[cat], 'err', cat);
     p.rowBodyEl.className = 'row-body error';
-    p.rowBodyEl.textContent = `${msg}。可点行尾 ↻ 仅重发该家，或全屏手动发送。`;
+    p.rowBodyEl.textContent =
+      msg + (cat === 'risk'
+        ? '。页面可能需要登录/验证：点「🛡 去验证」全屏处理，回来后自动补发。'
+        : '。可点行尾 ↻ 仅重发该家，或全屏手动发送。');
   }
   updateProgress();
 }
 
 async function broadcast(text, siteIds) {
   sendBtn.disabled = true;
+  roundAborted = false; // 新一轮开始，清除上一轮的停止标记
+  // I6：进行中反馈--文案「回答中 x/y」+ 小进度环，消除"是不是卡了"的疑虑
+  sendBtn.classList.add('busy');
+  sendBtn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span><span class="busy-label">回答中…</span>';
   currentQuestion = text;
   desktopRoundSaved = false;
   roundSettleHandled = false;
@@ -795,6 +916,7 @@ async function broadcast(text, siteIds) {
   activeRoundIds = new Set(scope.map((p) => p.adapter.id));
 
   for (const p of panels.values()) {
+    collapseRow(p); // I2：新一轮开始，收起上一轮展开的行
     if (activeRoundIds.has(p.adapter.id)) {
       p.reply = '';
       p.lastText = '';
@@ -822,6 +944,76 @@ async function broadcast(text, siteIds) {
   const tasks = scope.map((p) => runSendTask(p, text));
   await Promise.allSettled(tasks);
   sendBtn.disabled = false;
+  sendBtn.classList.remove('busy');
+  sendBtn.textContent = '发送';
+}
+
+// I3：「去验证」返回后自动补发（等页面稳定再发，避免刚收起就打字失败）。
+// 多家同时待补发时依次排队；该家已在发送/生成中则跳过。
+function scheduleVerifyResends() {
+  for (const p of panels.values()) {
+    if (!p.pendingVerifyResend) continue;
+    p.pendingVerifyResend = false;
+    if (p.rowVerifyBtn) p.rowVerifyBtn.hidden = true;
+    const target = p;
+    setTimeout(() => {
+      if (target.state === 'sending' || target.state === 'generating') return;
+      if (!currentQuestion) return; // 没有本轮问题无从补发
+      setCardState(target, '验证后补发…', 'info');
+      resendPanel(target.adapter.id);
+    }, 1500);
+  }
+}
+
+// ================= I2：回复行就地展开全文（手风琴） =================
+// 行点击=展开/收起该家全文（Markdown 渲染）；展开的行占更大空间、其余行自动压缩，
+// rows 列表永不出滚动条--长文只在展开区内部滚动。「跳总结附录」降级为展开区内次级入口。
+function renderRowFull(p) {
+  const text = p.reply || p.lastText || '';
+  if (!text) {
+    p.rowFullEl.className = 'row-full empty';
+    p.rowFullEl.textContent = p.rowBodyEl.textContent || '（暂无内容）';
+    return;
+  }
+  p.rowFullEl.className = 'row-full';
+  const md = document.createElement('div');
+  md.className = 'md';
+  md.innerHTML = renderMarkdown(text);
+  const jump = document.createElement('button');
+  jump.className = 'mini row-jump';
+  jump.textContent = '在总结附录中查看 ↗';
+  jump.title = '跳转到右侧总结里该家的原文小节';
+  jump.addEventListener('click', (e) => {
+    e.stopPropagation();
+    jumpToSummaryFamily(p.adapter.name);
+  });
+  p.rowFullEl.replaceChildren(md, jump);
+}
+
+function collapseRow(p) {
+  p.rowFullEl.hidden = true;
+  p.row.classList.remove('expanded');
+  p.rowCaretEl.classList.remove('open');
+}
+
+function expandRow(p) {
+  p.rowFullEl.hidden = false;
+  p.row.classList.add('expanded');
+  p.rowCaretEl.classList.add('open');
+  renderRowFull(p);
+}
+
+// 手风琴：同时只展开一家（多家齐展开会互相挤压，可读性差）
+function toggleRowExpand(p) {
+  const willOpen = p.rowFullEl.hidden;
+  if (willOpen) {
+    for (const other of panels.values()) {
+      if (other !== p && !other.rowFullEl.hidden) collapseRow(other);
+    }
+    expandRow(p);
+  } else {
+    collapseRow(p);
+  }
 }
 
 // 单家补发（行尾 ↻ 按钮）：只重发该家，不清空其他家回复，不影响本轮总结范围
@@ -914,6 +1106,42 @@ function startPoller() {
   poller = setInterval(pollOnce, POLL_INTERVAL);
 }
 
+function stopPoller() {
+  if (poller) {
+    clearInterval(poller);
+    poller = null;
+  }
+}
+
+// ================= 停止本轮（右上角 ⏹ 按钮） =================
+// 语义：中断等待与轮询；已交卷的回复原样保留，未完的家标记「已停止」（可 ↻ 重发）。
+// 发送管线（runSendTask）不强行中断--网页里可能已实际发出，只是不再等它的回复。
+let roundAborted = false;
+
+function stopRound() {
+  if (stopBtn.hidden) return;
+  roundAborted = true;
+  stopPoller();
+  for (const p of roundScope()) {
+    if (p.state === 'sending' || p.state === 'generating') {
+      p.state = 'error';
+      p.genStart = null;
+      setCardState(p, '⏹ 已停止', 'warn');
+      p.rowBodyEl.className = 'row-body placeholder';
+      p.rowBodyEl.textContent = '已手动停止，可点 ↻ 重发';
+      setStatus(p.statusEl, '已停止');
+    }
+  }
+  // 立即恢复交互（broadcast 收尾也会做同样的事，重复执行无害）
+  sendBtn.disabled = false;
+  sendBtn.classList.remove('busy');
+  sendBtn.textContent = '发送';
+  stopBtn.hidden = true;
+  updateProgress();
+}
+
+stopBtn.addEventListener('click', stopRound);
+
 async function pollOnce() {
   const tasks = [...panels.values()].map(async (p) => {
     if (p.state === 'done' || p.state === 'idle') return;
@@ -975,9 +1203,14 @@ async function pollOnce() {
       const staleMax = (p.adapter && p.adapter.staleMax) || 8;
       if (p.staleCount >= staleMax && p.state !== 'error') {
         p.state = 'error';
-        setStatus(p.statusEl, '未取到本轮回复');
-        setCardState(p, '未取到回复', 'err');
-        p.rowStateEl.title = '未取到本轮回复，可点右侧「↻ 重发」';
+        // V5：抓取超时先探页面是否停在登录/验证（风控高发期的典型表现），
+        // 是则归为「需人工验证」并给「去验证」入口（I3），否则按超时可重试
+        const cat = await detectErrorCategory(p, '未取到本轮回复');
+        setCardState(p, ERR_LABELS[cat], 'err', cat);
+        setStatus(p.statusEl, cat === 'risk' ? '页面停在登录/验证（风控）' : '未取到本轮回复（超时）');
+        p.rowStateEl.title = cat === 'risk'
+          ? '页面停在登录/验证，点「🛡 去验证」全屏处理，回来后自动补发'
+          : '未取到本轮回复，可点右侧「↻ 重发」';
       }
       updateProgress();
       return;
@@ -997,6 +1230,7 @@ async function pollOnce() {
       // 已进入生成中后，状态文字交给 1s 计时器维护（生成中… Ns），这里不再覆盖
       p.rowBodyEl.className = 'row-body';
       p.rowBodyEl.textContent = text;
+      if (!p.rowFullEl.hidden) renderRowFull(p); // I2：展开态下同步刷新全文
     }
     // 连续多轮（约 12s）抓到相同文本才判完成：思考/搜索中的短暂停顿不该掐断输出
     // （此前 2 轮即判完成，曾把智谱思考前奏、MiniMax 搜索前奏当完整答案）。
@@ -1009,9 +1243,10 @@ async function pollOnce() {
       setStatus(p.statusEl, '已完成');
       setCardState(p, '已完成 ✓', 'ok');
       p.rowStateEl.title = '点击跳转总结原文';
-      // 预览固定一行纯文本（首行 + 省略号）；全文点行跳转总结附录查看
+      // 预览固定多行纯文本（超出裁剪）；全文点行就地展开（I2）
       p.rowBodyEl.className = 'row-body';
       p.rowBodyEl.textContent = text;
+      if (!p.rowFullEl.hidden) renderRowFull(p);
     }
     updateProgress();
   });
@@ -1088,6 +1323,13 @@ function updateProgress() {
   progressFill.style.width = total ? `${Math.round((settled / total) * 100)}%` : '0%';
   progressFill.className = counts.error ? 'err' : '';
 
+  // 停止按钮：本轮有仍在发送/生成中的家时才显示（广播与单家补发都覆盖）
+  stopBtn.hidden = !(counts.sending > 0 || counts.generating > 0);
+
+  // I6：发送按钮进行中实时计数（仅轮次进行时更新，结束后 broadcast 恢复）
+  const busyLabel = sendBtn.querySelector('.busy-label');
+  if (busyLabel) busyLabel.textContent = total ? `回答中 ${settled}/${total}` : '回答中…';
+
   // 服务编排：若正有 HTTP/agent 触发的轮次在跑，顺带上报进度
   if (activeServiceRequestId) {
     roundtable.reportServiceProgress({ requestId: activeServiceRequestId, total, ...counts });
@@ -1159,7 +1401,9 @@ function buildSummaryToc() {
   const seen = new Set(); // 每家只取第一次出现（回复正文里也可能有【家名】字样）
   let appendixEl = null; // 附录标题（供「各家意见」分组跳转）
   let inAppendix = false;
-  for (const el of summaryBody.children) {
+  // V1：正文包在 .reading-col 里，目录扫描取限位容器的子节点
+  const scanRoot = summaryBody.querySelector('.reading-col') || summaryBody;
+  for (const el of scanRoot.children) {
     const t = (el.textContent || '').trim();
     if (/^附录/.test(t)) {
       inAppendix = true;
@@ -1427,15 +1671,32 @@ async function doSummarize() {
     const content = raw.trim() + appendix;
     lastSummary = content;
     summaryBody.className = 'summary-body md';
-    summaryBody.innerHTML = renderMarkdown(content);
+    // V1：阅读行宽限位容器（46em 居中），正文块都包在里层
+    const readingCol = document.createElement('div');
+    readingCol.className = 'reading-col settle'; // V6：总结落定动画
+    readingCol.innerHTML = renderMarkdown(content);
+    summaryBody.replaceChildren(readingCol);
     buildSummaryToc();
     summaryStatus.textContent = `生成时间 ${new Date().toLocaleTimeString()}`;
     summaryStatus.className = 'card-state ok';
     notify('AI 圆桌', '总结已生成');
     return content;
   } catch (e) {
+    const msg = `总结调用失败：${e.message || e}`;
     summaryBody.className = 'summary-body error';
-    summaryBody.textContent = `总结调用失败：${e.message || e}`;
+    // 错误与登录相关时给出「去登录」直达按钮（失败场景就地引导，不用再找入口）
+    summaryBody.replaceChildren();
+    const msgEl = document.createElement('div');
+    msgEl.textContent = msg;
+    summaryBody.appendChild(msgEl);
+    if (/登录/.test(msg)) {
+      const loginBtn = document.createElement('button');
+      loginBtn.className = 'mini sum-login-btn';
+      loginBtn.textContent = '去登录';
+      loginBtn.title = '全屏打开总结账号页面，登录后再点「总结」';
+      loginBtn.addEventListener('click', () => focusPanel('summarizer'));
+      summaryBody.appendChild(loginBtn);
+    }
     summaryStatus.textContent = '总结失败';
     summaryStatus.className = 'card-state err';
     throw e;
@@ -1515,7 +1776,7 @@ async function tryUploadFile(sp, filePath) {
     await setFiles();
     return true;
   } catch {}
-  for (const sel of SUMMARIZER.uploadSelectors || []) {
+  for (const sel of sumAd.uploadSelectors || []) {
     try {
       const clicked = await execInPanel(
         sp.webview,
@@ -1559,18 +1820,19 @@ async function waitSendReady(webview) {
 // 与参与回答的 deepseek 面板互不干扰。
 async function summarizeViaWeb(usable, skipped) {
   const sp = summarizerPanel;
+  const sumAd = getSummarizerAdapter(); // 总结模型可在设置中切换（默认 DeepSeek）
   // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（HTTP 服务轮次）不打扰
-  if (!document.hidden) focusPanel(SUMMARIZER.id);
+  if (!document.hidden) focusPanel('summarizer');
 
   setStatus(sp.statusEl, '正在打开新总结会话…');
-  sp.webview.loadURL(SUMMARIZER.url).catch(() => {});
+  sp.webview.loadURL(sumAd.url).catch(() => {});
   await waitWebviewReady(sp.webview, 60000);
   await sleep(3000); // 等 SPA 初始化出输入框
 
   // 基线：发送前抓到的内容都算旧的；发送后若始终只能抓到它，说明新总结还没到
   let baseline = '';
   try {
-    const pre = await execInPanel(sp.webview, buildScrapeScript(SUMMARIZER, ''));
+    const pre = await execInPanel(sp.webview, buildScrapeScript(sumAd, ''));
     if (pre && pre.ok && !pre.pending) baseline = cleanReply(pre.text);
   } catch {}
 
@@ -1593,10 +1855,10 @@ async function summarizeViaWeb(usable, skipped) {
   }
 
   setStatus(sp.statusEl, '正在发送总结请求…');
-  let res = await sendToPanel(SUMMARIZER, sp.webview, sendText);
+  let res = await sendToPanel(sumAd, sp.webview, sendText);
   if (!res || !res.ok) {
     await sleep(1500);
-    res = await sendToPanel(SUMMARIZER, sp.webview, sendText);
+    res = await sendToPanel(sumAd, sp.webview, sendText);
   }
   if (!res || !res.ok) {
     setStatus(sp.statusEl, '发送失败');
@@ -1615,7 +1877,7 @@ async function summarizeViaWeb(usable, skipped) {
     summaryStatus.textContent = `总结中… ${Math.round((Date.now() - start) / 1000)}s`;
     let r;
     try {
-      r = await execInPanel(sp.webview, buildScrapeScript(SUMMARIZER, ''));
+      r = await execInPanel(sp.webview, buildScrapeScript(sumAd, ''));
     } catch {
       continue; // 执行超时，下轮再试
     }
@@ -1738,9 +2000,12 @@ document.getElementById('summary-top').addEventListener('click', () => {
   summaryBody.scrollTop = 0;
 });
 
-// 「📋 总结」标题：点开 DeepSeek 总结账号页面（仅全屏展开供手动登录第二账号，不触发总结）
+// 「📋 总结 · XX」标题与「账号」按钮：全屏展开总结账号页面（仅登录/查看，不触发总结）
 document.getElementById('summary-title').addEventListener('click', () => {
-  focusPanel(SUMMARIZER.id);
+  focusPanel('summarizer');
+});
+document.getElementById('sum-account-btn').addEventListener('click', () => {
+  focusPanel('summarizer');
 });
 
 // ================= 服务编排（本地 HTTP / agent 触发轮次） =================
@@ -1807,6 +2072,67 @@ roundtable.onServiceAsk(async ({ requestId, question, sites }) => {
   }
 });
 
+// ================= 界面主题（V4：深色默认 / 浅色 / 跟随系统） =================
+// 存储值：''（跟随系统，默认）| 'dark' | 'light'；实际生效值写到 <html data-theme>。
+// 深色是基础变量组（:root 原值），浅色由 [data-theme="light"] 覆盖。
+const cfgThemeAuto = document.getElementById('cfg-theme-auto');
+const cfgThemeDark = document.getElementById('cfg-theme-dark');
+const cfgThemeLight = document.getElementById('cfg-theme-light');
+const lightMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+
+function getThemeSetting() {
+  const v = localStorage.getItem('rt_theme');
+  return v === 'dark' || v === 'light' ? v : 'auto';
+}
+
+function applyTheme() {
+  const t = getThemeSetting();
+  const effective = t === 'auto' ? (lightMQ && lightMQ.matches ? 'light' : 'dark') : t;
+  document.documentElement.dataset.theme = effective;
+}
+
+applyTheme();
+// 系统主题切换时即时跟随（仅「跟随系统」模式受影响）
+if (lightMQ && lightMQ.addEventListener) lightMQ.addEventListener('change', applyTheme);
+
+// ================= 总结模型选择（网页总结用哪一家） =================
+// 下拉按总结适用度排序（评估结论沉淀在各 option 的 title 里），原则：
+// ①附件直传可用（全文总结不截断）②长上下文 ③抓取稳定 ④速度/风控
+const SUM_MODEL_NOTES = {
+  deepseek: '推荐：附件直传（docx/md）实测可用，抓取稳定，现役总结模型',
+  mimo: '百万级上下文、响应快；实测文件框接受 docx/doc/md',
+};
+
+const cfgSumModel = document.getElementById('cfg-sum-model');
+const cfgModelsEl = document.getElementById('cfg-models');
+for (const id of SUM_MODEL_ALLOWED) {
+  const a = ADAPTERS.find((x) => x.id === id);
+  if (!a) continue;
+  const opt = document.createElement('option');
+  opt.value = a.id;
+  opt.textContent = a.name;
+  opt.title = SUM_MODEL_NOTES[a.id] || '';
+  cfgSumModel.appendChild(opt);
+}
+
+// 重叠确认弹窗（保存时触发）：所选总结模型同时参与分头回答 -> 提醒双账号价值，
+// 用户可「仍这样保存」或「返回调整」。共用一个账号也可以（提示里说明）。
+const sumOverlapModal = document.getElementById('sum-overlap-modal');
+const sumOverlapText = document.getElementById('sum-overlap-text');
+function sumModelOverlaps() {
+  const checked = new Set(
+    [...cfgModelsEl.querySelectorAll('input[type="checkbox"]:checked')].map((cb) => cb.dataset.id)
+  );
+  return checked.has(cfgSumModel.value);
+}
+document.getElementById('sum-overlap-ok').addEventListener('click', () => {
+  sumOverlapModal.hidden = true;
+  doSaveSettings();
+});
+document.getElementById('sum-overlap-cancel').addEventListener('click', () => {
+  sumOverlapModal.hidden = true; // 回到设置弹窗，不保存
+});
+
 // ================= 设置弹窗 =================
 const modal = document.getElementById('settings-modal');
 const cfgModeWeb = document.getElementById('cfg-mode-web');
@@ -1816,11 +2142,11 @@ const cfgBaseURL = document.getElementById('cfg-baseurl');
 const cfgApiKey = document.getElementById('cfg-apikey');
 const cfgModel = document.getElementById('cfg-model');
 const cfgAutoSummary = document.getElementById('cfg-autosummary');
-const cfgModelsEl = document.getElementById('cfg-models');
+// cfgModelsEl 已在「总结模型选择」区块声明（勾选区 change 事件要早绑）
 const cfgEnterCtrl = document.getElementById('cfg-enter-ctrl');
 const cfgEnterEnter = document.getElementById('cfg-enter-enter');
 
-// 参与各家勾选区：按适配器动态生成（品牌色点 + 名称），状态在 openSettings 时回填
+// 参与各家勾选区：按适配器动态生成（官方 logo + 名称），状态在 openSettings 时回填
 for (const a of ADAPTERS) {
   const label = document.createElement('label');
   label.className = 'cfg-check cfg-model';
@@ -1829,7 +2155,8 @@ for (const a of ADAPTERS) {
   cb.dataset.id = a.id;
   const dot = document.createElement('span');
   dot.className = 'cfg-dot';
-  dot.style.background = BRAND_COLORS[a.id] || 'var(--accent)';
+  dot.style.background = BRAND_COLORS[a.id] || 'var(--accent)'; // logo 缺失时的兜底色点
+  attachBadgeLogo(dot, a.id);
   label.appendChild(cb);
   label.appendChild(dot);
   label.appendChild(document.createTextNode(a.name));
@@ -1859,6 +2186,11 @@ function openSettings() {
   }
   cfgEnterCtrl.checked = !getEnterSend();
   cfgEnterEnter.checked = getEnterSend();
+  const theme = getThemeSetting();
+  cfgThemeAuto.checked = theme === 'auto';
+  cfgThemeDark.checked = theme === 'dark';
+  cfgThemeLight.checked = theme === 'light';
+  cfgSumModel.value = getSummarizerSiteId(); // 总结模型回填
   modal.hidden = false;
 }
 
@@ -1876,7 +2208,8 @@ document.getElementById('cfg-sel-all').addEventListener('click', () => {
 document.getElementById('cfg-sel-none').addEventListener('click', () => {
   for (const cb of cfgModelsEl.querySelectorAll('input[type="checkbox"]')) cb.checked = false;
 });
-document.getElementById('cfg-save').addEventListener('click', () => {
+// 实际保存动作（「仍这样保存」与无重叠路径共用）
+function doSaveSettings() {
   localStorage.setItem('rt_summaryMode', cfgModeApi.checked ? 'api' : 'web');
   localStorage.setItem('rt_baseURL', cfgBaseURL.value.trim());
   localStorage.setItem('rt_apiKey', cfgApiKey.value.trim());
@@ -1887,9 +2220,33 @@ document.getElementById('cfg-save').addEventListener('click', () => {
     .map((cb) => cb.dataset.id);
   localStorage.setItem('rt_selected', JSON.stringify(ids));
   localStorage.setItem('rt_enterSend', cfgEnterEnter.checked ? '1' : '0');
+  // V4：主题即时生效（跟随系统 / 深色 / 浅色）
+  localStorage.setItem('rt_theme',
+    cfgThemeDark.checked ? 'dark' : cfgThemeLight.checked ? 'light' : '');
+  applyTheme();
+  // 总结模型：切换时重建总结面板（各模型分区独立，登录态互不丢）
+  const prevSumId = getSummarizerSiteId();
+  localStorage.setItem('rt_summarizer', cfgSumModel.value);
+  if (cfgSumModel.value !== prevSumId) rebuildSummarizerPanel();
   applySelection();
   syncPromptPlaceholder();
   modal.hidden = true;
+}
+
+document.getElementById('cfg-save').addEventListener('click', () => {
+  // 网页总结且总结模型与勾选的回答模型重叠：弹窗提醒双账号价值，确认后才保存
+  if (cfgModeWeb.checked && sumModelOverlaps()) {
+    const name = (ADAPTERS.find((a) => a.id === cfgSumModel.value) || {}).name || cfgSumModel.value;
+    sumOverlapText.innerHTML =
+      `「${name}」同时承担<b>分头回答</b>与<b>总结</b>。建议用<b>两个账号</b>分别承担（本应用已用独立分区支持）：` +
+      '①上下文互不污染--回答不带总结任务记忆，总结不混入回答轮上下文；' +
+      '②风控/额度独立--两账号限流互不挤占；' +
+      '③可并行--回答进行中即可启动总结。' +
+      `共用一个账号也可以：在「${name}·总结」面板用同一账号登录一次即可。`;
+    sumOverlapModal.hidden = false;
+    return;
+  }
+  doSaveSettings();
 });
 modal.addEventListener('click', (e) => {
   if (e.target === modal) modal.hidden = true;
@@ -1996,6 +2353,45 @@ document.getElementById('history-clear').addEventListener('click', () => {
 historyModal.addEventListener('click', (e) => {
   if (e.target === historyModal) historyModal.hidden = true;
 });
+
+// ================= I7：首次使用轻引导 =================
+// 触发条件：从未关闭过引导 且 没有任何历史记录（老用户有历史，视为已上手不再打扰）。
+// 关闭即永久记住（localStorage），不再出现。
+(async function maybeShowGuide() {
+  try {
+    if (localStorage.getItem('rt_guide_done')) return;
+    const items = await roundtable.getHistory('', 1).catch(() => []);
+    if (items && items.length) {
+      localStorage.setItem('rt_guide_done', '1'); // 老用户：自动视为已上手
+      return;
+    }
+  } catch {}
+  showFirstUseGuide();
+})();
+
+function showFirstUseGuide() {
+  const el = document.createElement('div');
+  el.className = 'guide-bubble';
+  el.innerHTML = `
+    <div class="guide-title">👋 欢迎使用 AI 圆桌</div>
+    <ol class="guide-steps">
+      <li><b>登录</b>：点击上方模型按钮全屏打开各家网页完成登录，登录态会长期保存</li>
+      <li><b>提问</b>：在顶部输入框输入问题，Ctrl+Enter 同时发给已选的各家</li>
+      <li><b>看结果</b>：左下角实时跟进各家回复（点行展开全文），交卷后点「总结」生成五段横向总结</li>
+    </ol>
+    <div class="guide-actions">
+      <button class="primary guide-start">开始使用</button>
+    </div>
+    <button class="guide-close" title="关闭并不再显示">✕</button>
+  `;
+  document.body.appendChild(el);
+  const dismiss = () => {
+    localStorage.setItem('rt_guide_done', '1');
+    el.remove();
+  };
+  el.querySelector('.guide-start').addEventListener('click', dismiss);
+  el.querySelector('.guide-close').addEventListener('click', dismiss);
+}
 
 // ================= 输出区左右可拖拽分隔条 =================
 const divider = document.getElementById('divider');
