@@ -318,15 +318,26 @@ ipcMain.on('service:result', async (_event, data) => {
 
   if (pending.source === 'http') {
     try {
-      jsonResponse(pending.httpRes, 200, {
-        ok: true,
-        question: pending.question,
-        summary: data.summary || '',
-        summaryError: data.summaryError || '',
-        replies: data.replies || [],
-        // 微信（Hermes skill）等渠道：有此字段时把该 docx 作为附件发给用户
-        summaryFile: docxPath || '',
-      });
+      if (data.error) {
+        // 渲染层拒绝/失败（如桌面端圆桌占用 busy、round-failed）：如实回错误码，
+        // 不伪装成 ok:true 的空成功——调用方（Hermes skill）需要靠状态码决定重试
+        jsonResponse(pending.httpRes, data.error === 'busy' ? 429 : 500, {
+          ok: false,
+          error: data.error,
+          message: data.message || data.summaryError || '',
+          question: pending.question,
+        });
+      } else {
+        jsonResponse(pending.httpRes, 200, {
+          ok: true,
+          question: pending.question,
+          summary: data.summary || '',
+          summaryError: data.summaryError || '',
+          replies: data.replies || [],
+          // 微信（Hermes skill）等渠道：有此字段时把该 docx 作为附件发给用户
+          summaryFile: docxPath || '',
+        });
+      }
     } catch (e) {
       console.error('[http] 回写失败:', e && e.message);
     }

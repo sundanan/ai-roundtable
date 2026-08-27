@@ -1067,6 +1067,12 @@ function submit() {
     progressText.textContent = '本轮仍在进行，可点「⏹ 停止」结束后再提问';
     return;
   }
+  // HTTP/agent 服务轮次进行中（含其总结阶段）同样不受理：此时广播会覆写
+  // currentQuestion/roundScope，让在途服务轮拿到错题错答、总结拼上空附录
+  if (serviceBusy || activeServiceRequestId) {
+    progressText.textContent = '服务轮次处理中（HTTP/agent 触发），结束后再提问';
+    return;
+  }
   // 发送后保留输入文本（便于对照/改问再发）；清空请用「新问题」按钮
   const selected = getSelectedIds();
   if (!selected.length) {
@@ -2142,6 +2148,19 @@ function collectReplies() {
 roundtable.onServiceAsk(async ({ requestId, question, sites }) => {
   if (serviceBusy) {
     roundtable.reportServiceResult({ requestId, error: 'busy', message: '正在处理上一条，请稍候' });
+    return;
+  }
+  // 桌面端圆轮次或总结进行中：拒绝本轮，避免覆写 currentQuestion/roundScope
+  // 造成服务轮拿到错题错答、桌面轮被中途重置（互斥锁，与 submit() 的守卫互补）
+  if (
+    summarizeBusy ||
+    [...panels.values()].some((p) => p.state === 'sending' || p.state === 'generating')
+  ) {
+    roundtable.reportServiceResult({
+      requestId,
+      error: 'busy',
+      message: '桌面端圆桌/总结进行中，请稍后再试',
+    });
     return;
   }
   serviceBusy = true;
