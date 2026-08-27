@@ -15,8 +15,8 @@
       <textarea id="prompt" rows="3"
         placeholder="输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）"></textarea>
       <div class="composer-actions">
+        <!-- 发送/停止一体按钮：本轮进行中由 JS 原地切为红色「⏹ 停止」，布局恒定 -->
         <button id="send-btn" title="发送到勾选各家（Ctrl+Enter）">发送</button>
-        <button id="stop-btn" hidden title="停止本轮：中断等待与轮询，已交卷的回复保留">停止</button>
         <button id="summarize-btn" class="primary" title="生成圆桌总结（方式见设置）" disabled>总结</button>
         <button id="settings-btn" title="总结模型设置">设置</button>
         <button id="history-btn" title="历史记录">历史</button>

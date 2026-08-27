@@ -816,7 +816,22 @@ function waitWebviewReady(webview, timeoutMs = 45000) {
 const promptEl = document.getElementById('prompt');
 const sendBtn = document.getElementById('send-btn');
 const summarizeBtn = document.getElementById('summarize-btn');
-const stopBtn = document.getElementById('stop-btn');
+
+// 发送/停止一体按钮：同一元素双形态——空闲为蓝色「发送」；本轮任一家处于
+// sending/generating 时原地变红色「⏹ 停止」。只切文案与配色类，不增删节点，
+// 右上按钮组布局恒定（旧独立停止按钮插入网格会把「总结」挤列，整排按钮抖动）。
+// 形态由 updateProgress 依面板计数统一驱动，广播/单家补发/停止三条路径都覆盖。
+function syncSendStopButton(stopping) {
+  const mode = stopping ? 'stop' : 'send';
+  if (sendBtn.dataset.mode === mode) return;
+  sendBtn.dataset.mode = mode;
+  sendBtn.classList.toggle('stopping', stopping);
+  sendBtn.textContent = stopping ? '⏹ 停止' : '发送';
+  sendBtn.disabled = false;
+  sendBtn.title = stopping
+    ? '停止本轮：中断等待与轮询，已交卷的回复保留'
+    : '发送到勾选各家（Ctrl+Enter）';
+}
 
 let currentQuestion = ''; // 本轮问题原文，抓取时用于排除"把问题当答案"
 let activeRoundIds = null; // 本轮参与面板 id 集合；null=全部（改进2 可选子集）
@@ -900,11 +915,8 @@ async function runSendTask(p, text) {
 }
 
 async function broadcast(text, siteIds) {
-  sendBtn.disabled = true;
   roundAborted = false; // 新一轮开始，清除上一轮的停止标记
-  // I6：进行中反馈--文案「回答中 x/y」+ 小进度环，消除"是不是卡了"的疑虑
-  sendBtn.classList.add('busy');
-  sendBtn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span><span class="busy-label">回答中…</span>';
+  // 按钮切「⏹ 停止」不在这里手工改写：下方标记面板 sending 后由 updateProgress 统一驱动
   currentQuestion = text;
   desktopRoundSaved = false;
   roundSettleHandled = false;
@@ -943,9 +955,7 @@ async function broadcast(text, siteIds) {
 
   const tasks = scope.map((p) => runSendTask(p, text));
   await Promise.allSettled(tasks);
-  sendBtn.disabled = false;
-  sendBtn.classList.remove('busy');
-  sendBtn.textContent = '发送';
+  updateProgress(); // 发送阶段结束：是否仍有家在生成，由面板计数统一决定按钮形态
 }
 
 // I3：「去验证」返回后自动补发（等页面稳定再发，避免刚收起就打字失败）。
@@ -1044,6 +1054,11 @@ async function resendPanel(id) {
 function submit() {
   const text = promptEl.value.trim();
   if (!text) return;
+  // 本轮仍在进行时不受理新广播（快捷键入口同样拦住；界面此时按钮已是「停止」）
+  if ([...panels.values()].some((p) => p.state === 'sending' || p.state === 'generating')) {
+    progressText.textContent = '本轮仍在进行，可点「⏹ 停止」结束后再提问';
+    return;
+  }
   // 发送后保留输入文本（便于对照/改问再发）；清空请用「新问题」按钮
   const selected = getSelectedIds();
   if (!selected.length) {
@@ -1053,7 +1068,10 @@ function submit() {
   broadcast(text, selected);
 }
 
-sendBtn.addEventListener('click', submit);
+sendBtn.addEventListener('click', () => {
+  if (sendBtn.dataset.mode === 'stop') stopRound();
+  else submit();
+});
 // 新问题：清空输入框（发送不再自动清空），焦点回到输入框
 document.getElementById('new-btn').addEventListener('click', () => {
   promptEl.value = '';
@@ -1119,7 +1137,7 @@ function stopPoller() {
 let roundAborted = false;
 
 function stopRound() {
-  if (stopBtn.hidden) return;
+  if (sendBtn.dataset.mode !== 'stop') return;
   roundAborted = true;
   stopPoller();
   for (const p of roundScope()) {
@@ -1132,15 +1150,8 @@ function stopRound() {
       setStatus(p.statusEl, '已停止');
     }
   }
-  // 立即恢复交互（broadcast 收尾也会做同样的事，重复执行无害）
-  sendBtn.disabled = false;
-  sendBtn.classList.remove('busy');
-  sendBtn.textContent = '发送';
-  stopBtn.hidden = true;
-  updateProgress();
+  updateProgress(); // 面板到终态后由 syncSendStopButton 自动复原「发送」
 }
-
-stopBtn.addEventListener('click', stopRound);
 
 async function pollOnce() {
   const tasks = [...panels.values()].map(async (p) => {
@@ -1323,12 +1334,8 @@ function updateProgress() {
   progressFill.style.width = total ? `${Math.round((settled / total) * 100)}%` : '0%';
   progressFill.className = counts.error ? 'err' : '';
 
-  // 停止按钮：本轮有仍在发送/生成中的家时才显示（广播与单家补发都覆盖）
-  stopBtn.hidden = !(counts.sending > 0 || counts.generating > 0);
-
-  // I6：发送按钮进行中实时计数（仅轮次进行时更新，结束后 broadcast 恢复）
-  const busyLabel = sendBtn.querySelector('.busy-label');
-  if (busyLabel) busyLabel.textContent = total ? `回答中 ${settled}/${total}` : '回答中…';
+  // 发送/停止一体按钮：有家在发送/生成中→红色「⏹ 停止」，全到终态→复原「发送」
+  syncSendStopButton(counts.sending > 0 || counts.generating > 0);
 
   // 服务编排：若正有 HTTP/agent 触发的轮次在跑，顺带上报进度
   if (activeServiceRequestId) {
@@ -2471,6 +2478,7 @@ document.addEventListener('mouseup', () => {
   } catch {}
 });
 
-// ================= 启动初始化：应用参与选择 + 输入框快捷键提示语 =================
+// ================= 启动初始化：应用参与选择 + 输入框快捷键提示语 + 按钮形态 =================
 applySelection();
 syncPromptPlaceholder();
+syncSendStopButton(false);

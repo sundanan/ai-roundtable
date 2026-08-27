@@ -141,16 +141,6 @@ body {
   white-space: nowrap;
 }
 #send-btn { grid-row: 1 / 3; grid-column: 1; font-weight: 600; }
-/* 停止按钮：仅在轮次进行中显示，出现时「总结」让出一列（相邻兄弟选择器） */
-#stop-btn {
-  grid-row: 1;
-  grid-column: 2;
-  color: var(--err);
-  border-color: var(--err);
-  font-weight: 600;
-}
-#stop-btn:hover { background: var(--err-soft); border-color: var(--err); }
-#stop-btn:not([hidden]) + #summarize-btn { grid-column: 3; }
 #summarize-btn { grid-row: 1; grid-column: 2 / 4; }
 #settings-btn { grid-row: 2; grid-column: 2; }
 #history-btn { grid-row: 2; grid-column: 3; }
@@ -162,25 +152,14 @@ body {
   color: #fff;
 }
 #send-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-/* I6：轮次进行中--按钮带小进度环与实时计数（busy-label 由 updateProgress 刷新） */
-#send-btn.busy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  opacity: 0.9;
-  cursor: progress;
+/* 发送/停止一体按钮：本轮进行中原位变红轮廓「⏹ 停止」——只换配色文案，
+   尺寸/位置/元素数不变（旧独立停止按钮会把「总结」挤列、整排按钮抖动） */
+#send-btn.stopping {
+  background: var(--bg-panel);
+  color: var(--err);
+  border-color: var(--err);
 }
-.btn-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  animation: rt-spin 0.8s linear infinite;
-}
-@keyframes rt-spin { to { transform: rotate(360deg); } }
+#send-btn.stopping:hover { background: var(--err-soft); border-color: var(--err); }
 
 button {
   padding: 9px 16px;
