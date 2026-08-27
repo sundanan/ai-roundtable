@@ -97,7 +97,13 @@ const ADAPTERS = [
       '[contenteditable="true"]',
       'textarea',
     ],
+    // 2026-08-27 实测：发送键是 div.enter.is-main-chat > .enter-icon-container（纸飞机
+    // img.enter_icon），类名不含 send；不同页面状态下对回车的响应时灵时不灵（同一会话
+    // 有时"内容仍在输入框"判发送失败），故显式配上发送键选择器走可信鼠标点击主路径
     sendSelectors: [
+      '.enter.is-main-chat .enter-icon-container',
+      '.enter.is-main-chat',
+      '.enter-icon-container',
       'button[class*="send"]',
       '[class*="send" i]',
     ],
@@ -183,9 +189,15 @@ const ADAPTERS = [
       '[contenteditable="true"]',
       'textarea',
     ],
+    // 2026-08-27 改版实测：整体是 TipTap 富文本编辑器；发送键不是 <button>，
+    // 而是 div[data-testid="send-button"][aria-label="发送消息"]（bg_interaction_primary_*），
+    // 类名全是 Tailwind 原子类不含 send——旧 button[class*=send] 与全部通用兜底均不命中，
+    // 只剩可信回车兜底而本站不认回车，导致“填进去了但永远发不出去”。
     sendSelectors: [
+      '[data-testid="send-button"]',
+      '[aria-label="发送消息"]',
       'button[class*="send"]',
-      '[class*="sendBtn"]',
+      'button[class*="sendBtn"]',
     ],
     responseSelectors: [
       '[data-testid="assistant-segment-active"]',

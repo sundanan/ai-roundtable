@@ -425,6 +425,8 @@ function buildClickSendScript(adapter) {
       'button[data-testid*="send"]',
       'button[class*="send" i]:not([disabled])',
       '[role="button"][class*="send" i]',
+      // MiniMax 2026-08-27 实测：发送键可为 div 等非 button 元素，仅有 testid/aria 标识
+      '[data-testid*="send" i]', '[aria-label*="发送" i]', '[aria-label*="Send" i]',
       'a[class*="send" i]', '[class*="send-btn" i]', '[class*="sendBtn" i]'
     ]);
     var btn = null;
@@ -464,6 +466,8 @@ function buildSendRectScript(adapter) {
       'button[data-testid*="send"]',
       'button[class*="send" i]:not([disabled])',
       '[role="button"][class*="send" i]',
+      // MiniMax 2026-08-27 实测：发送键可为 div 等非 button 元素，仅有 testid/aria 标识
+      '[data-testid*="send" i]', '[aria-label*="发送" i]', '[aria-label*="Send" i]',
       'a[class*="send" i]', '[class*="send-btn" i]', '[class*="sendBtn" i]'
     ]);
     var btn = find(sendList);
@@ -676,7 +680,11 @@ function buildScrapeScript(adapter, question) {
         }
         if (text.length < 2) continue; // 剪完没有答案内容 → 换下一个选择器/继续等待
         if (text.length < 300 && PENDING.test(text)) return { ok: true, pending: true, text: '' };
-        if (text.length < 200 && stopVisible()) return { ok: true, pending: true, text: '' };
+        // watchStop 家（智谱/Kimi/MiniMax/总结者）："停止生成"按钮仍可见 = 站点仍在生成，
+        // 一律 pending。旧判据只保护 <200 字短文本——智谱深度思考的长推理流（>300 字）
+        // 在流内停顿 ≥3 个轮询周期就被当成完整答案交卷（2026-08-27 实测 24 点题：
+        // 626 字推理被当回复）。生成中不管文本多长都不能判完成；按钮消失后自然走稳定判卷。
+        if (stopVisible()) return { ok: true, pending: true, text: '' };
         return { ok: true, text: text.slice(0, 8000) };
       }
     }
@@ -1985,23 +1993,99 @@ document.getElementById('summary-copy').addEventListener('click', async (e) => {
   setTimeout(() => (btn.textContent = '复制'), 1500);
 });
 
-// 总结导出 Markdown：带问题与时间抬头，经主进程保存对话框写盘
-document.getElementById('summary-save').addEventListener('click', async (e) => {
-  const btn = e.currentTarget;
-  if (!lastSummary) return;
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const name =
-    `圆桌总结-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `-${pad(d.getHours())}${pad(d.getMinutes())}.md`;
-  const doc =
-    `# ${currentQuestion || 'AI 圆桌总结'}\n\n` +
-    `> 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}\n\n` +
-    `${lastSummary}\n`;
-  const r = await roundtable.saveMarkdown(name, doc);
-  btn.textContent = r && r.ok ? '已保存 ✓' : '已取消';
-  setTimeout(() => (btn.textContent = '存为 MD'), 1500);
+// ================= 总结导出（Markdown / PDF 二选一） =================
+// 「导出」弹出格式菜单；MD 经主进程对话框直接写盘；
+// PDF 由本文件拼出自包含 HTML（含打印浅色排版），主进程离屏窗口 printToPDF——
+// HTML 即中转格式（pandoc 转 PDF 需 LaTeX，本机不具备）。
+const exportBtn = document.getElementById('summary-export');
+const exportMenu = document.getElementById('export-menu');
+
+function toggleExportMenu(show) {
+  if (!lastSummary && show) return;
+  exportMenu.hidden = !show;
+}
+exportBtn.addEventListener('click', (e) => {
+  e.stopPropagation(); // 不冒泡到 document 的「点别处收起」监听
+  toggleExportMenu(exportMenu.hidden);
 });
+exportMenu.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', () => toggleExportMenu(false));
+
+for (const item of exportMenu.querySelectorAll('.export-item')) {
+  item.addEventListener('click', async () => {
+    toggleExportMenu(false);
+    if (!lastSummary) return;
+    const format = item.dataset.format === 'pdf' ? 'pdf' : 'md';
+    const btn = exportBtn;
+    btn.textContent = '导出中…';
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp =
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+      `-${pad(d.getHours())}${pad(d.getMinutes())}`;
+    const markdown =
+      `# ${currentQuestion || 'AI 圆桌总结'}\n\n` +
+      `> 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}\n\n` +
+      `${lastSummary}\n`;
+    let r;
+    try {
+      r = await roundtable.exportSummary({
+        format,
+        defaultName: `圆桌总结-${stamp}`,
+        markdown,
+        html: buildExportHtml(currentQuestion, lastSummary, d),
+      });
+    } catch (e) {
+      r = { ok: false, error: String(e.message || e) };
+    }
+    btn.textContent = r && r.ok ? '已导出 ✓' : r && r.canceled ? '已取消' : '导出失败';
+    if (r && !r.ok && !r.canceled && r.error) setStatus(summaryStatus, `导出失败：${r.error}`);
+    setTimeout(() => (btn.textContent = '导出'), 1500);
+  });
+}
+
+// 自包含导出 HTML：复用界面同款 renderMarkdown（表格/五段标题结构一致），
+// 但用打印向的浅色独立排版（与界面主题无关）；printToPDF 按此渲染 A4
+function buildExportHtml(question, summaryMd, d) {
+  const escQ = String(question || 'AI 圆桌总结')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>${escQ}</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  body {
+    font-family: "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei",
+      "Microsoft YaHei", system-ui, sans-serif;
+    color: #111; background: #fff;
+    font-size: 11pt; line-height: 1.75; margin: 0;
+  }
+  h1 { font-size: 17pt; line-height: 1.45; margin: 0 0 4px; }
+  .meta { color: #666; font-size: 9.5pt; margin: 0 0 14px;
+    padding-bottom: 10px; border-bottom: 1px solid #ddd; }
+  .md h2 { font-size: 13pt; margin: 18px 0 8px; }
+  .md h2.lv1 { border-left: 3px solid #333; padding-left: 9px; }
+  .md h2.appendix { border-bottom: 1px dashed #bbb; padding-bottom: 6px; }
+  .md h3 { font-size: 11.5pt; margin: 14px 0 6px; color: #222; }
+  .md p, .md li { margin: 4px 0; }
+  .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+  .md code { background: #f3f3f3; border-radius: 3px; padding: 1px 4px;
+    font-size: 10pt; font-family: "JetBrains Mono", Consolas, monospace; }
+  .md table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.8pt; }
+  .md th, .md td { border: 1px solid #999; padding: 4px 8px; text-align: left;
+    vertical-align: top; }
+  .md th { background: #f2f2f2; }
+</style>
+</head>
+<body>
+<h1>${escQ}</h1>
+<p class="meta">AI 圆桌总结 · 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}</p>
+<div class="md">${renderMarkdown(summaryMd)}</div>
+</body>
+</html>`;
+}
 
 document.getElementById('summary-top').addEventListener('click', () => {
   summaryBody.scrollTop = 0;
