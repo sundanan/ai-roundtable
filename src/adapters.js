@@ -75,7 +75,12 @@ const ADAPTERS = [
       '[contenteditable="true"]',
       'textarea',
     ],
+    // 2026-08-27 校准（selector-check 抓到专属失效）：发送键是 div.SendButton_sendButton__*
+    // （CSS Modules 稳定前缀，空输入时并列 disabled 态类），aria-label="发送"——
+    // 旧 a[class*=send-btn]/button[class*=send] 全部失配，此前一直靠通用兜底 [aria-label*=发送] 命中
     sendSelectors: [
+      '[aria-label="发送"]',
+      '[class*="SendButton_sendButton"]',
       'a[class*="send-btn"]',
       'button[class*="send"]',
       '[class*="send__button"]',
