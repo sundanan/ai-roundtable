@@ -1779,7 +1779,9 @@ function buildWebSummaryPrompt(usable, skipped) {
 
 // 把附件文件上传进总结者页面：优先直接找 input[type=file]（CDP 直塞文件）；
 // 找不到时按 uploadSelectors 逐个点击附件按钮候选，等它进 DOM 再试。成功返回 true。
-async function tryUploadFile(sp, filePath) {
+// ad 由调用方传入（总结者适配器随设置切换，不是全局量——此前直接引用 summarizeViaWeb
+// 的局部 sumAd，回退路径一跑就 ReferenceError，整个总结失败而非降级为文本模式）
+async function tryUploadFile(sp, ad, filePath) {
   let wcId;
   try {
     wcId = sp.webview.getWebContentsId();
@@ -1791,7 +1793,7 @@ async function tryUploadFile(sp, filePath) {
     await setFiles();
     return true;
   } catch {}
-  for (const sel of sumAd.uploadSelectors || []) {
+  for (const sel of (ad && ad.uploadSelectors) || []) {
     try {
       const clicked = await execInPanel(
         sp.webview,
@@ -1858,7 +1860,7 @@ async function summarizeViaWeb(usable, skipped) {
   let uploaded = false;
   if (file && file.ok && file.path) {
     setStatus(sp.statusEl, '正在上传原文附件…');
-    uploaded = await tryUploadFile(sp, file.path);
+    uploaded = await tryUploadFile(sp, sumAd, file.path);
   }
   if (uploaded) {
     setStatus(sp.statusEl, '等待附件就绪…');
