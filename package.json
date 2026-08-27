@@ -5,6 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron . --disable-gpu --in-process-gpu --ozone-platform=x11",
+    "test": "node --test",
     "dist:deb": "electron-builder --linux deb"
   },
   "keywords": [
