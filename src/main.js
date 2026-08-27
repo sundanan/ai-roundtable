@@ -7,6 +7,12 @@ const history = require('./history');
 const { ADAPTERS } = require('./adapters');
 const VALID_SITE_IDS = new Set(ADAPTERS.map((a) => a.id));
 
+// 10 个 webview 面板的加载事件都经 Electron 在宿主 WebContents 上挂转发监听，
+// 基数大，Node 默认上限 10 容易在重建总结者面板（切换总结模型）的瞬时重叠下
+// 触发 MaxListenersExceededWarning（生产日志实测 11 个 did-stop-loading）。
+// 提高默认上限消除误报警告；真实泄漏仍会表现为监听数持续增长，不会被掩盖。
+require('events').EventEmitter.defaultMaxListeners = 25;
+
 // 去掉 File/Edit/View 原生菜单栏，界面只保留自己的按钮
 Menu.setApplicationMenu(null);
 

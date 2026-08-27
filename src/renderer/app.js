@@ -162,6 +162,10 @@ for (const adapter of ADAPTERS) {
     if (entry.dot.className !== 'dot error') setDots(entry, 'ready');
   });
   webview.addEventListener('did-fail-load', (e) => {
+    // ERR_ABORTED(-3)：站点入口跳转/SPA 重定向掐断首次导航的正常现象
+    // （文心入口每次加载都触发，曾把状态灯打成"加载失败"并因 did-stop-loading
+    // 的防覆盖守卫卡死红点），不算失败，交给后续 did-stop-loading 归位
+    if (e.errorCode === -3) return;
     setDots(entry, 'error');
     setStatus(entry.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
   });
@@ -222,22 +226,35 @@ function rebuildSummarizerPanel() {
   summarizerPanel.adapter = ad;
   summarizerPanel.panelEl.querySelector('.panel-name').textContent = `${baseAd.name}·总结`;
   setStatus(summarizerPanel.statusEl, '首次使用：请在此手动登录总结专用账号（可与回答用同一家的不同账号）');
-  if (summarizerPanel.webview) summarizerPanel.webview.remove();
+  if (summarizerPanel.webview) {
+    // 先显式摘掉旧 webview 的监听再移除：重建（切换总结模型）时若 guest 销毁晚于
+    // 新建，事件转发监听会在宿主上瞬时叠加，触发 MaxListenersExceededWarning
+    if (summarizerPanel._unbind) summarizerPanel._unbind();
+    summarizerPanel.webview.remove();
+  }
   const webview = document.createElement('webview');
   webview.setAttribute('src', ad.url);
   webview.setAttribute('partition', `persist:${siteId}-sum`);
   webview.setAttribute('allowpopups', '');
   summarizerPanel.panelEl.appendChild(webview);
-  webview.addEventListener('did-start-loading', () => (summarizerPanel.dot.className = 'dot loading'));
-  webview.addEventListener('did-finish-load', () => (summarizerPanel.dot.className = 'dot ready'));
-  webview.addEventListener('dom-ready', () => (summarizerPanel.dot.className = 'dot ready'));
-  webview.addEventListener('did-stop-loading', () => {
-    if (summarizerPanel.dot.className !== 'dot error') summarizerPanel.dot.className = 'dot ready';
-  });
-  webview.addEventListener('did-fail-load', (e) => {
-    summarizerPanel.dot.className = 'dot error';
-    setStatus(summarizerPanel.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
-  });
+  const bind = (ev, fn) => {
+    webview.addEventListener(ev, fn);
+    return [ev, fn];
+  };
+  const bound = [
+    bind('did-start-loading', () => (summarizerPanel.dot.className = 'dot loading')),
+    bind('did-finish-load', () => (summarizerPanel.dot.className = 'dot ready')),
+    bind('dom-ready', () => (summarizerPanel.dot.className = 'dot ready')),
+    bind('did-stop-loading', () => {
+      if (summarizerPanel.dot.className !== 'dot error') summarizerPanel.dot.className = 'dot ready';
+    }),
+    bind('did-fail-load', (e) => {
+      if (e.errorCode === -3) return; // 同上：入口跳转掐断导航不算失败
+      summarizerPanel.dot.className = 'dot error';
+      setStatus(summarizerPanel.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+    }),
+  ];
+  summarizerPanel._unbind = () => bound.forEach(([ev, fn]) => webview.removeEventListener(ev, fn));
   summarizerPanel.webview = webview;
   // 标题直接显示当前总结模型（可见性），tooltip 说明点击行为
   const titleEl = document.getElementById('summary-title');
