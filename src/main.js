@@ -352,17 +352,55 @@ ipcMain.on('save-history', (_event, entry) => {
 // 桌面端历史弹窗查询
 ipcMain.handle('get-history', (_event, q, limit) => history.query(q || '', limit || 20));
 
-// 总结导出为 Markdown：系统保存对话框，默认落到文档目录
-ipcMain.handle('save-markdown', async (_event, defaultName, content) => {
+// 总结导出：md 直接写盘；pdf 以调用方拼好的自包含 HTML 为中转——写入临时文件、
+// 离屏窗口加载后 printToPDF（A4 带背景），临时 html 无论成败都清理。
+// pandoc 转 PDF 需 LaTeX 引擎（本机不具备），printToPDF 走 Chromium 自身排版，零依赖。
+const os = require('os');
+
+async function htmlToPdf(html) {
+  const tmpPath = path.join(os.tmpdir(), `ai-roundtable-export-${Date.now()}.html`);
+  fs.writeFileSync(tmpPath, html, 'utf8');
+  // 本机（UOS arm64）已实测：隐藏窗口 loadFile 后 printToPDF 稳定出 A4；
+  // webPreferences 保持默认（沙箱+contextIsolation 即默认开启）
+  const win = new BrowserWindow({ show: false });
+  try {
+    await win.loadFile(tmpPath);
+    return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+  } finally {
+    win.destroy();
+    try { fs.unlinkSync(tmpPath); } catch {}
+  }
+}
+
+ipcMain.handle('export-summary', async (_event, opts) => {
   if (!mainWindow) return { ok: false, error: 'no-window' };
+  const format = opts && opts.format === 'pdf' ? 'pdf' : 'md';
+  const ext = format === 'pdf' ? 'pdf' : 'md';
+  const base = String((opts && opts.defaultName) || '圆桌总结').replace(/\.(md|pdf)$/i, '');
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: '保存总结为 Markdown',
-    defaultPath: path.join(app.getPath('documents'), defaultName || '圆桌总结.md'),
-    filters: [{ name: 'Markdown', extensions: ['md'] }],
+    title: format === 'pdf' ? '导出总结为 PDF' : '导出总结为 Markdown',
+    defaultPath: path.join(app.getPath('documents'), `${base}.${ext}`),
+    filters:
+      format === 'pdf'
+        ? [{ name: 'PDF', extensions: ['pdf'] }]
+        : [{ name: 'Markdown', extensions: ['md'] }],
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
-  fs.writeFileSync(filePath, content, 'utf8');
-  return { ok: true, filePath };
+  // 选择器没带对扩展名时补上（Linux GTK 个别场景选了过滤器仍返回裸文件名）
+  const target = filePath.toLowerCase().endsWith(`.${ext}`) ? filePath : `${filePath}.${ext}`;
+  try {
+    if (format === 'md') {
+      fs.writeFileSync(target, String(opts.markdown || ''), 'utf8');
+    } else {
+      const buf = await htmlToPdf(String(opts.html || ''));
+      fs.writeFileSync(target, buf);
+    }
+    console.log(`[export] 已导出 ${format.toUpperCase()}: ${target}`);
+    return { ok: true, filePath: target };
+  } catch (e) {
+    console.error('[export] 导出失败:', e && e.message);
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 });
 
 // ===== 网页总结附件（DeepSeek 第二账号）：生成 docx + CDP 直传文件输入框 =====

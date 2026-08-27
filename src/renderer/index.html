@@ -50,7 +50,14 @@
           <span class="summary-actions">
             <button id="sum-account-btn" class="mini" title="全屏打开总结账号页面（登录/查看）">账号</button>
             <button id="summary-copy" class="mini" title="复制总结全文">复制</button>
-            <button id="summary-save" class="mini" title="保存总结为 Markdown 文件">存为 MD</button>
+            <span class="export-wrap">
+              <button id="summary-export" class="mini" title="导出总结：Markdown 或 PDF">导出</button>
+              <!-- 导出格式菜单：绝对定位悬于下方，展开/收起不改变布局 -->
+              <span id="export-menu" class="export-menu" hidden>
+                <button class="mini export-item" data-format="md">Markdown (.md)</button>
+                <button class="mini export-item" data-format="pdf">PDF (.pdf)</button>
+              </span>
+            </span>
             <button id="summary-top" class="mini" title="回到顶部">↑ 顶部</button>
           </span>
           <span id="summary-status" class="card-state"></span>

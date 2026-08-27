@@ -20,8 +20,8 @@ contextBridge.exposeInMainWorld('roundtable', {
   saveHistory: (entry) => ipcRenderer.send('save-history', entry),
   getHistory: (q, limit) => ipcRenderer.invoke('get-history', q, limit),
 
-  // ===== 总结导出 =====
-  saveMarkdown: (name, content) => ipcRenderer.invoke('save-markdown', name, content),
+  // ===== 总结导出（Markdown / PDF，PDF 由主进程 HTML->printToPDF）=====
+  exportSummary: (opts) => ipcRenderer.invoke('export-summary', opts),
 
   // ===== 网页总结附件（DeepSeek 第二账号）=====
   buildUploadFile: (markdown) => ipcRenderer.invoke('build-upload-file', markdown),
