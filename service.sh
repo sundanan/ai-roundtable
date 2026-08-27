@@ -27,7 +27,9 @@ echo "===== AI圆桌服务启动 $(date '+%F %T') =====" >> "$LOG"
 # 本机（统信 UOS arm64）该进程反复启动失败（error_code=1002）并 FATAL 掉整个应用
 # （2026-08-21/22/23 三次同样死法，8-22 那次宕机 44 小时）。--in-process-gpu 把
 # GPU 任务并入主进程，不再派生这个必崩的子进程。
-GPU_FLAGS="--disable-gpu --in-process-gpu --ozone-platform=x11"
+# CDP 调试端口（仅 127.0.0.1）：供选择器每日自检（ai-roundtable-check.timer +
+# scripts/selector-check.js 只读探测）与排障使用；单用户桌面环境风险可控。
+GPU_FLAGS="--disable-gpu --in-process-gpu --ozone-platform=x11 --remote-debugging-port=9222"
 # 位置自适应：
 # - 开发版：本脚本在仓库根（electron 在 node_modules 里，应用根为当前目录 "."）
 # - 安装版（deb）：本脚本在 /opt/ai-roundtable/resources/ 下，二进制在上一级
