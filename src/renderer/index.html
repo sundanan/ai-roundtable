@@ -203,7 +203,13 @@
     </div>
   </div>
 
+  <!-- 渲染层模块按依赖顺序加载（经典脚本共享全局词法作用域，职责见 app.js 头注释） -->
   <script src="../adapters.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/panels.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/summary.js"></script>
+  <script src="js/ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

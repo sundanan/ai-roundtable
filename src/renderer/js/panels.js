@@ -1,0 +1,389 @@
+/* global ADAPTERS, SUMMARIZER */
+/**
+ * 面板与视觉状态层。
+ * 职责：9+1 个 webview 面板/模型按钮/回复行的构建与视觉状态（状态灯、状态胶囊、
+ * 参与选择、行展开手风琴、全屏浮层切换、总结者面板重建）。
+ * 依赖：js/core.js（execInPanel）；轮次生命周期见 js/engine.js。
+ */
+
+// ================= 状态 =================
+// id -> { adapter, webview, dot(面板内), barBtn(第二层按钮), statusEl, rowStateEl, rowBodyEl,
+//         row, state: idle|sending|generating|done|error, lastText, stableCount, reply }
+const panels = new Map();
+
+// 总结模型白名单：仅「网页对话框可直接上传文件」的模型（附件 docx/md 可突破
+// 输入框字数限制，完整输入 9 家原文）。2026-08-25 实测：DeepSeek/MiMo 接受
+// docx/doc/md；其余家无现成文件框（回退文本模式每家截断 2000 字）或仅接受图片。
+// 注意必须声明在使用之前：rebuildSummarizerPanel() 在文件头部即会取该名单。
+const SUM_MODEL_ALLOWED = ['deepseek', 'mimo'];
+
+const dock = document.getElementById('dock');
+const modelGrid = document.getElementById('model-grid');
+const rowsEl = document.getElementById('rows');
+const subsetCountEl = document.getElementById('subset-count');
+
+// ================= webview 面板（dock 隐藏层 + 全屏浮层） =================
+function focusPanel(id) {
+  const p = panels.get(id) || (id === 'summarizer' ? summarizerPanel : null);
+  if (!p) return;
+  p.panelEl.classList.add('focused');
+  dock.classList.add('active');
+}
+
+function unfocusPanel() {
+  const focused = document.querySelector('.webview-panel.focused');
+  if (focused) focused.classList.remove('focused');
+  dock.classList.remove('active');
+  scheduleVerifyResends(); // I3：从「去验证」全屏返回 -> 自动补发该家
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') unfocusPanel();
+});
+
+// 模型按钮栅格按适配器数量 N 等分（7→8 家时无需改 CSS）
+modelGrid.style.gridTemplateColumns = `repeat(${ADAPTERS.length}, 1fr)`; // 9 列均分，窄屏由容器查询缩字号/只留 logo
+
+// 各家品牌色（徽章底色，近似值；未列出的用主色兜底）
+const BRAND_COLORS = {
+  qwen: '#615ced',
+  doubao: '#3b5bfd',
+  yuanbao: '#00a870',
+  zhipu: '#3859ff',
+  kimi: '#2b2f36',
+  deepseek: '#4d6bfe',
+  minimax: '#f0564f',
+  wenxin: '#2932e1',
+  mimo: '#ff6900',
+};
+
+// V3：徽章内嵌官方 logo（assets/logos/<id>.png，64px）；加载成功后隐藏首字母
+// 兜底方案（素材缺失/文件损坏）自动回退到「品牌色方块 + 首字母」，不影响使用
+function attachBadgeLogo(badgeEl, id) {
+  const img = document.createElement('img');
+  img.className = 'badge-logo';
+  img.alt = '';
+  img.src = `../../assets/logos/${id}.png`;
+  img.onload = () => badgeEl.classList.add('has-logo');
+  img.onerror = () => img.remove();
+  badgeEl.appendChild(img);
+}
+
+for (const adapter of ADAPTERS) {
+  // 面板（webview 容器）
+  const panelEl = document.createElement('div');
+  panelEl.className = 'webview-panel';
+  panelEl.innerHTML = `
+    <div class="panel-header">
+      <span class="dot"></span>
+      <span class="panel-name">${adapter.name}</span>
+      <span class="panel-status"></span>
+      <button class="mini reload" title="刷新该面板">⟳</button>
+      <button class="mini close-focus">✕ 关闭（Esc）</button>
+    </div>
+  `;
+  const webview = document.createElement('webview');
+  webview.setAttribute('src', adapter.url);
+  webview.setAttribute('partition', `persist:${adapter.id}`);
+  webview.setAttribute('allowpopups', '');
+  panelEl.appendChild(webview);
+  dock.appendChild(panelEl);
+
+  // 第二层按钮：品牌徽章 + 名称。单击=全屏打开该网页（手动登录/查看/补发）；
+  // 是否参与本轮提问在「设置」里勾选，按钮明暗仅作参与状态展示
+  const barBtn = document.createElement('div');
+  barBtn.className = 'model-btn checked';
+  barBtn.innerHTML =
+    `<span class="model-badge" data-id="${adapter.id}">${adapter.name[0]}</span>` +
+    `<span class="model-name" data-id="${adapter.id}">${adapter.name}</span>` +
+    `<span class="model-status"></span>`;
+  barBtn.querySelector('.model-badge').style.background =
+    BRAND_COLORS[adapter.id] || 'var(--accent)';
+  attachBadgeLogo(barBtn.querySelector('.model-badge'), adapter.id);
+  barBtn.addEventListener('click', () => focusPanel(adapter.id));
+  modelGrid.appendChild(barBtn);
+
+  // 第三层回复行（行内始终显示回复预览；点击就地展开全文，I2）
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `
+    <div class="row-head">
+      <span class="row-name">${adapter.name}</span>
+      <span class="row-state">待发送</span>
+      <button class="mini row-verify" hidden title="全屏打开该家完成登录/验证，回来后自动补发">🛡 去验证</button>
+      <button class="mini row-resend" title="仅重发该家（不影响其他家）">↻</button>
+      <span class="row-caret">›</span>
+    </div>
+    <div class="row-body placeholder">尚未发送</div>
+    <div class="row-full" hidden></div>
+  `;
+  row.addEventListener('click', () => toggleRowExpand(entry));
+  // 单家补发：只重发该家，阻止冒泡避免触发行点击跳转
+  row.querySelector('.row-resend').addEventListener('click', (e) => {
+    e.stopPropagation();
+    resendPanel(adapter.id);
+  });
+  // I3：风控行「去验证」--全屏该家完成登录/验证，收起面板后自动补发一次
+  row.querySelector('.row-verify').addEventListener('click', (e) => {
+    e.stopPropagation();
+    entry.pendingVerifyResend = true;
+    setCardState(entry, '🛡 去验证中…', 'warn');
+    focusPanel(adapter.id);
+  });
+  rowsEl.appendChild(row);
+
+  const entry = {
+    adapter,
+    panelEl,
+    webview,
+    row,
+    barBtn,
+    dot: panelEl.querySelector('.dot'),
+    statusDot: barBtn.querySelector('.model-status'),
+    statusEl: panelEl.querySelector('.panel-status'),
+    rowStateEl: row.querySelector('.row-state'),
+    rowResendBtn: row.querySelector('.row-resend'),
+    rowVerifyBtn: row.querySelector('.row-verify'),
+    rowBodyEl: row.querySelector('.row-body'),
+    rowFullEl: row.querySelector('.row-full'),
+    rowCaretEl: row.querySelector('.row-caret'),
+    state: 'idle',
+    lastText: '',
+    stableCount: 0,
+    reply: '',
+    genStart: null, // 进入 generating 的时间戳（等待计时用）
+  };
+
+  panelEl.querySelector('.reload').addEventListener('click', () => webview.reload());
+  panelEl.querySelector('.close-focus').addEventListener('click', unfocusPanel);
+
+  webview.addEventListener('did-start-loading', () => setDots(entry, 'loading'));
+  webview.addEventListener('did-finish-load', () => setDots(entry, 'ready'));
+  webview.addEventListener('dom-ready', () => setDots(entry, 'ready'));
+  // 任何加载序列结束都会触发 did-stop-loading：SPA 站内路由/子帧活动会反复触发
+  // did-start-loading 却不一定伴随 did-finish-load/dom-ready，曾导致橙点常挂不灭
+  webview.addEventListener('did-stop-loading', () => {
+    if (entry.dot.className !== 'dot error') setDots(entry, 'ready');
+  });
+  webview.addEventListener('did-fail-load', (e) => {
+    // ERR_ABORTED(-3)：站点入口跳转/SPA 重定向掐断首次导航的正常现象
+    // （文心入口每次加载都触发，曾把状态灯打成"加载失败"并因 did-stop-loading
+    // 的防覆盖守卫卡死红点），不算失败，交给后续 did-stop-loading 归位
+    if (e.errorCode === -3) return;
+    setDots(entry, 'error');
+    setStatus(entry.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+  });
+
+  panels.set(adapter.id, entry);
+}
+
+// ================= 总结者面板（总结专用账号；仅驻留 dock，不参与广播） =================
+// 总结模型可在「设置」里选择（默认 DeepSeek）：每家独立分区 persist:<id>-sum，
+// 与同站参与回答的面板会话完全隔离（可登录两个账号）。点「总结」走网页总结时被
+// 全屏展开（focusPanel('summarizer')），首次使用需用户手动登录总结专用账号。
+function getSummarizerSiteId() {
+  const saved = localStorage.getItem('rt_summarizer');
+  return SUM_MODEL_ALLOWED.includes(saved) ? saved : 'deepseek'; // 非白名单回退 DeepSeek
+}
+
+// 总结模型配置：DeepSeek 用 SUMMARIZER 的增强配置（附件上传候选/思考块剪枝），
+// 其余家直接沿用各自回答条目的选择器配置
+function getSummarizerAdapter() {
+  const siteId = getSummarizerSiteId();
+  return siteId === 'deepseek' ? SUMMARIZER : ADAPTERS.find((a) => a.id === siteId);
+}
+
+const summarizerPanel = (() => {
+  const panelEl = document.createElement('div');
+  panelEl.className = 'webview-panel';
+  panelEl.innerHTML = `
+    <div class="panel-header">
+      <span class="dot"></span>
+      <span class="panel-name"></span>
+      <span class="panel-status"></span>
+      <button class="mini reload" title="刷新该面板">⟳</button>
+      <button class="mini close-focus">✕ 关闭（Esc）</button>
+    </div>
+  `;
+  dock.appendChild(panelEl);
+  const entry = {
+    adapter: null,
+    panelEl,
+    webview: null,
+    dot: panelEl.querySelector('.dot'),
+    statusEl: panelEl.querySelector('.panel-status'),
+  };
+  panelEl.querySelector('.reload').addEventListener('click', () => {
+    if (entry.webview) entry.webview.reload();
+  });
+  panelEl.querySelector('.close-focus').addEventListener('click', unfocusPanel);
+  return entry;
+})();
+
+// 按当前设置（重）建总结者 webview：切换总结模型时调用（旧 webview 直接移除，
+// 各家分区独立持久化，切回不丢登录态）
+function rebuildSummarizerPanel() {
+  const ad = getSummarizerAdapter();
+  const siteId = getSummarizerSiteId();
+  // 面板名用基础站点名（SUMMARIZER.name 已含「·总结」后缀，直接拼会重复）
+  const baseAd = ADAPTERS.find((a) => a.id === siteId) || ad;
+  summarizerPanel.adapter = ad;
+  summarizerPanel.panelEl.querySelector('.panel-name').textContent = `${baseAd.name}·总结`;
+  setStatus(summarizerPanel.statusEl, '首次使用：请在此手动登录总结专用账号（可与回答用同一家的不同账号）');
+  if (summarizerPanel.webview) {
+    // 先显式摘掉旧 webview 的监听再移除：重建（切换总结模型）时若 guest 销毁晚于
+    // 新建，事件转发监听会在宿主上瞬时叠加，触发 MaxListenersExceededWarning
+    if (summarizerPanel._unbind) summarizerPanel._unbind();
+    summarizerPanel.webview.remove();
+  }
+  const webview = document.createElement('webview');
+  webview.setAttribute('src', ad.url);
+  webview.setAttribute('partition', `persist:${siteId}-sum`);
+  webview.setAttribute('allowpopups', '');
+  summarizerPanel.panelEl.appendChild(webview);
+  const bind = (ev, fn) => {
+    webview.addEventListener(ev, fn);
+    return [ev, fn];
+  };
+  const bound = [
+    bind('did-start-loading', () => (summarizerPanel.dot.className = 'dot loading')),
+    bind('did-finish-load', () => (summarizerPanel.dot.className = 'dot ready')),
+    bind('dom-ready', () => (summarizerPanel.dot.className = 'dot ready')),
+    bind('did-stop-loading', () => {
+      if (summarizerPanel.dot.className !== 'dot error') summarizerPanel.dot.className = 'dot ready';
+    }),
+    bind('did-fail-load', (e) => {
+      if (e.errorCode === -3) return; // 同上：入口跳转掐断导航不算失败
+      summarizerPanel.dot.className = 'dot error';
+      setStatus(summarizerPanel.statusEl, `加载失败：${e.errorDescription || e.errorCode}`);
+    }),
+  ];
+  summarizerPanel._unbind = () => bound.forEach(([ev, fn]) => webview.removeEventListener(ev, fn));
+  summarizerPanel.webview = webview;
+  // 标题直接显示当前总结模型（可见性），tooltip 说明点击行为
+  const titleEl = document.getElementById('summary-title');
+  titleEl.textContent = `📋 总结 · ${baseAd.name}`;
+  titleEl.title = `点开「${baseAd.name}」总结账号页面（手动登录总结专用账号用）`;
+}
+
+rebuildSummarizerPanel();
+
+const DOT_LABELS = {
+  '': '未加载',
+  loading: '加载中',
+  ready: '就绪',
+  error: '加载失败',
+};
+
+function setDots(p, state) {
+  p.dot.className = 'dot' + (state ? ` ${state}` : '');
+  // 网页状态用按钮右上角小圆点表达（绿=就绪/橙=加载/红=失败），边框/明暗只表达是否参与本轮
+  p.statusDot.className = 'model-status' + (state ? ` ${state}` : '');
+  const label = DOT_LABELS[state] || state || '';
+  p.statusDot.title = `${p.adapter.name}：${label || '未加载'}`;
+  p.barBtn.title =
+    `${p.adapter.name}${label ? `：${label}` : ''} · 单击全屏打开；参与选择在「设置」`;
+}
+
+// 本轮参与选择：持久化在 localStorage（设置弹窗勾选；缺省=全部）
+function getSelectedIds() {
+  try {
+    const v = JSON.parse(localStorage.getItem('rt_selected') || 'null');
+    if (Array.isArray(v)) return v.filter((id) => panels.has(id));
+  } catch {}
+  return [...panels.keys()];
+}
+
+// 把存储的选择应用到模型按钮（选中=亮，未选=暗）并刷新计数
+function applySelection() {
+  const sel = new Set(getSelectedIds());
+  for (const p of panels.values()) {
+    p.barBtn.classList.toggle('checked', sel.has(p.adapter.id));
+    p.barBtn.classList.toggle('unchecked', !sel.has(p.adapter.id));
+  }
+  updateSubsetCount();
+}
+
+// 已选 N/总数 计数（点击打开「设置」调整参与各家）
+function updateSubsetCount() {
+  subsetCountEl.textContent = `已选 ${getSelectedIds().length}/${panels.size}`;
+}
+
+function setStatus(el, text) {
+  el.textContent = text || '';
+  el.title = text || '';
+}
+
+// 状态胶囊：只放短状态，引导语放 tooltip；失败时整行红边 + 重发按钮放大为「↻ 重发」
+// V5：失败时按 errCat 视觉分级（risk=橙🛡需人工 / timeout=蓝⏱可重试 / sendfail=红⚠），
+// 风控行额外显示「🛡 去验证」按钮（I3）
+function setCardState(p, text, cls, errCat) {
+  p.rowStateEl.textContent = text;
+  p.rowStateEl.className = 'row-state' + (cls ? ` ${cls}` : '');
+  p.rowStateEl.title = text;
+  const failed = cls === 'err';
+  p.row.classList.toggle('failed', failed);
+  p.rowResendBtn.classList.toggle('urgent', failed);
+  p.rowResendBtn.textContent = failed ? '↻ 重发' : '↻';
+  // V5：错误分级样式（仅在失败态有意义；非失败时清掉残留）
+  const cat = failed ? errCat || 'sendfail' : '';
+  p.row.classList.toggle('errcat-risk', cat === 'risk');
+  p.row.classList.toggle('errcat-timeout', cat === 'timeout');
+  p.row.classList.toggle('errcat-sendfail', cat === 'sendfail');
+  // I3：仅风控（需人工）显示「去验证」
+  if (p.rowVerifyBtn) {
+    p.rowVerifyBtn.hidden = !(failed && cat === 'risk');
+    if (!(failed && cat === 'risk')) p.pendingVerifyResend = false;
+  }
+}
+
+// ================= I2：回复行就地展开全文（手风琴） =================
+// 行点击=展开/收起该家全文（Markdown 渲染）；展开的行占更大空间、其余行自动压缩，
+// rows 列表永不出滚动条--长文只在展开区内部滚动。「跳总结附录」降级为展开区内次级入口。
+function renderRowFull(p) {
+  const text = p.reply || p.lastText || '';
+  if (!text) {
+    p.rowFullEl.className = 'row-full empty';
+    p.rowFullEl.textContent = p.rowBodyEl.textContent || '（暂无内容）';
+    return;
+  }
+  p.rowFullEl.className = 'row-full';
+  const md = document.createElement('div');
+  md.className = 'md';
+  md.innerHTML = renderMarkdown(text);
+  const jump = document.createElement('button');
+  jump.className = 'mini row-jump';
+  jump.textContent = '在总结附录中查看 ↗';
+  jump.title = '跳转到右侧总结里该家的原文小节';
+  jump.addEventListener('click', (e) => {
+    e.stopPropagation();
+    jumpToSummaryFamily(p.adapter.name);
+  });
+  p.rowFullEl.replaceChildren(md, jump);
+}
+
+function collapseRow(p) {
+  p.rowFullEl.hidden = true;
+  p.row.classList.remove('expanded');
+  p.rowCaretEl.classList.remove('open');
+}
+
+function expandRow(p) {
+  p.rowFullEl.hidden = false;
+  p.row.classList.add('expanded');
+  p.rowCaretEl.classList.add('open');
+  renderRowFull(p);
+}
+
+// 手风琴：同时只展开一家（多家齐展开会互相挤压，可读性差）
+function toggleRowExpand(p) {
+  const willOpen = p.rowFullEl.hidden;
+  if (willOpen) {
+    for (const other of panels.values()) {
+      if (other !== p && !other.rowFullEl.hidden) collapseRow(other);
+    }
+    expandRow(p);
+  } else {
+    collapseRow(p);
+  }
+}
