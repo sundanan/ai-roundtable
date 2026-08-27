@@ -164,6 +164,31 @@ function buildSummaryDocx(question, summary) {
 }
 
 // ----- 本地 HTTP 接口 -----
+// 防跨站触发/DNS rebinding：
+//  - Host 校验：rebinding 攻击把攻击域名解析到 127.0.0.1，Host 头仍是攻击域名 → 拒绝；
+//  - Origin 校验：浏览器发起的跨站 POST（fetch text/plain 可绕过预检）必带 Origin，
+//    非 127.0.0.1/localhost 白名单 → 拒绝；curl/Hermes skill 等脚本工具不带 Origin，不受影响；
+//  - 可选 token：设 ROUNDTABLE_TOKEN 环境变量后，POST /ask 须带 X-RT-Token 头
+//    （默认不启用，零配置摩擦；仅当端口需要暴露给非本机场景时才需要。
+//    只约束 /ask，不拦 /health——watchdog 探活不带 token）
+const EXPECTED_HOSTS = new Set([
+  `127.0.0.1:${ROUNDTABLE_PORT}`,
+  `localhost:${ROUNDTABLE_PORT}`,
+  `[::1]:${ROUNDTABLE_PORT}`,
+]);
+const ALLOWED_ORIGINS = new Set([
+  `http://127.0.0.1:${ROUNDTABLE_PORT}`,
+  `http://localhost:${ROUNDTABLE_PORT}`,
+]);
+const REQ_TOKEN = process.env.ROUNDTABLE_TOKEN || '';
+
+function crossOriginBlocked(req) {
+  if (!EXPECTED_HOSTS.has(String(req.headers.host || '').toLowerCase())) return true;
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(String(origin).toLowerCase())) return true;
+  return false;
+}
+
 // 超大 body 专用错误：调用方据此回 413。
 // 注意：超限只 reject、不毁连接——先让调用方把 413 写回去再关（2026-08-24 实测
 // 先 destroy 时客户端只收到 100-continue，看不到任何状态码）。
@@ -197,10 +222,18 @@ function jsonResponse(res, code, obj) {
 
 const httpServer = http.createServer(async (req, res) => {
   try {
+    // 统一入口防护（含 /health：恶意页面探测本服务存在与否无收益，一并收紧）
+    if (crossOriginBlocked(req)) {
+      return jsonResponse(res, 403, { ok: false, error: 'forbidden', message: '跨站/来源校验未通过' });
+    }
     if (req.method === 'GET' && req.url === '/health') {
       return jsonResponse(res, 200, { ok: true, ready: !!(mainWindow && !mainWindow.isDestroyed()) });
     }
     if (req.method === 'POST' && req.url === '/ask') {
+      // 可选 token（ROUNDTABLE_TOKEN 环境变量启用；默认不设不校验）
+      if (REQ_TOKEN && req.headers['x-rt-token'] !== REQ_TOKEN) {
+        return jsonResponse(res, 403, { ok: false, error: 'forbidden', message: '缺少或错误的 X-RT-Token' });
+      }
       let question = '';
       let sites;
       let async = false;
