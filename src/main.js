@@ -336,6 +336,14 @@ ipcMain.on('service:result', async (_event, data) => {
   clearRoundWatchdog(data.requestId); // 正常回报，撤掉超时兜底
   pendingRounds.delete(data.requestId);
 
+  // 有总结时落成 docx：附录含各家原文，正文可能数万字，文件形式体验远好于长文本。
+  // 先建 docx 再落库：历史记录携带 summaryFile，异步轮次经 /ask/status 取结果时
+  // 同样能拿到附件路径（同步响应字段与之一致）
+  let docxPath = null;
+  if (!data.error && data.summary) {
+    docxPath = await buildSummaryDocx(pending.question, data.summary);
+  }
+
   // 改进1：落库历史记录（跳过 busy/无数据轮次）
   if (!data.error && Array.isArray(data.replies)) {
     history.saveRound({
@@ -345,14 +353,9 @@ ipcMain.on('service:result', async (_event, data) => {
       source: pending.source,
       summary: data.summary || '',
       summaryError: data.summaryError || '',
+      summaryFile: docxPath || '',
       replies: data.replies || [],
     });
-  }
-
-  // 有总结时落成 docx：附录含各家原文，正文可能数万字，文件形式体验远好于长文本
-  let docxPath = null;
-  if (!data.error && data.summary) {
-    docxPath = await buildSummaryDocx(pending.question, data.summary);
   }
 
   if (pending.source === 'http') {

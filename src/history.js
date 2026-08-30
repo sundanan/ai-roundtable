@@ -34,7 +34,7 @@ function ensureLoaded() {
   return cache;
 }
 
-// entry: { id, ts, question, summary, summaryError, source, replies:[{id,name,state,text}] }
+// entry: { id, ts, question, summary, summaryError, summaryFile, source, replies:[{id,name,state,text}] }
 function saveRound(entry) {
   try {
     const list = ensureLoaded();
