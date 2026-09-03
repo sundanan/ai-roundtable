@@ -431,6 +431,36 @@ function cleanReply(text, question) {
   return out;
 }
 
+// 登录态只读探测（与 scripts/selector-check.js 同口径）：输入框可见 = 已登录；
+// URL/标题命中登录/验证特征 = 未登录。webview 尚未加载完时 input=false 且 href
+// 仍指向 about:blank 等入口——调用方须把「未加载」与「未登录」区分开（首启向导
+// 用 dot 未 ready 判未加载），避免冷启动把加载中的家误报成未登录。
+function buildLoginProbeScript(adapter) {
+  const cfg = JSON.stringify({ inputSelectors: adapter.inputSelectors });
+  return `(function () {
+    var cfg = ${cfg};
+    function visible(el) {
+      if (!el) return false;
+      var r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+    function find(list) {
+      for (var i = 0; i < list.length; i++) {
+        try {
+          var els = Array.prototype.slice.call(document.querySelectorAll(list[i]));
+          for (var j = 0; j < els.length; j++) if (visible(els[j])) return els[j];
+        } catch (e) {}
+      }
+      return null;
+    }
+    var input = find(cfg.inputSelectors) || find(['textarea', '[contenteditable="true"]']);
+    var href = String(location.href || '');
+    var loginLike = /login|passport|verify|captcha|account\\./.test(href.toLowerCase()) ||
+      /登录|登入|安全验证/.test(document.title || '');
+    return { input: !!input, loginLike: loginLike, href: href };
+  })()`;
+}
+
 // ================= 执行通道 =================
 const EXEC_TIMEOUT = 15000;
 
@@ -596,6 +626,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildVerifyFilledScript,
     buildVerifySentScript,
     buildScrapeScript,
+    buildLoginProbeScript,
     normText,
     cleanReply,
     execInPanel,

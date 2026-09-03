@@ -178,126 +178,17 @@ button.primary:hover { background: var(--accent-hover); }
 button.icon-btn { padding: 9px 12px; }
 button.icon-text-btn { padding: 9px 14px; }
 
-/* ---------- 第二层：子集控制 + 各家按钮 ---------- */
-#model-bar {
-  display: flex;
-  align-items: stretch;
-  gap: 10px;
-  padding: 5px 14px;
-  background: var(--bg);
-  flex: 0 0 auto;
-  overflow: hidden;
-}
-
-/* 优化1：子集控制区 */
-.subset-ctrl {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding-right: 10px;
-  border-right: 1px solid var(--border);
-}
+/* ---------- 进度行右侧：参与计数（点击进设置勾选参与各家） ---------- */
 .subset-count {
   font-size: 12px;
   color: var(--text-dim);
   white-space: nowrap;
   min-width: 56px;
+  text-align: right;
+  margin-left: auto;
   cursor: pointer; /* 点击打开「设置」调整参与各家 */
 }
 .subset-count:hover { color: var(--accent); }
-
-/* 模型栏作为容器查询基准：9 列始终均分、不出滚动条，
-   宽度不足时名称字号逐级缩小，极窄时只留 logo 图标 */
-#model-bar { container-type: inline-size; }
-
-#model-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-@container (max-width: 920px) {
-  .model-btn .model-name { font-size: 12px; }
-}
-@container (max-width: 800px) {
-  .model-btn .model-name { font-size: 11px; }
-  .model-btn { gap: 5px; padding: 8px 2px; }
-}
-@container (max-width: 680px) {
-  .model-btn .model-name { display: none; }
-}
-
-/* 模型按钮：品牌徽章 + 名称。单击=全屏打开该网页；是否参与本轮在「设置」勾选 */
-.model-btn {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 4px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
-  cursor: pointer;
-  user-select: none;
-  transition: opacity 0.15s, border-color 0.15s, background 0.15s;
-}
-.model-btn:hover { border-color: var(--accent); }
-/* 边框只表达选中态：选中=主色蓝框 + 微蓝底；未选中=灰框 + 整体变暗 */
-.model-btn.checked {
-  border-color: var(--accent);
-  background: var(--accent-faint);
-}
-.model-btn.unchecked { opacity: 0.6; }
-
-/* 网页加载状态挪到右上角小圆点：绿=就绪，橙=加载中，红=失败（与边框语义分离） */
-/* 网页加载状态圆点：只在异常时显示（橙=加载中、红=加载失败）；
-   绿色"就绪"启动后几乎永远常亮、信息量低，不再显示（状态文字仍在按钮 tooltip 里） */
-.model-status {
-  display: none;
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-.model-status.loading { display: block; background: var(--warn); }
-.model-status.error { display: block; background: var(--err); }
-
-/* 品牌徽章：各家官方 logo（V3，assets/logos/<id>.png）；素材缺失时回退
-   品牌色圆角方块 + 首字符（has-logo 未打上时的样子） */
-.model-badge {
-  position: relative;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  flex: 0 0 auto;
-  overflow: hidden;
-}
-.model-badge .badge-logo {
-  display: none;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-.model-badge.has-logo .badge-logo { display: block; }
-.model-badge.has-logo { background: transparent !important; font-size: 0; }
-
-/* 名称文字本体：字号收窄保证 8 家全名一行展示 */
-.model-name {
-  white-space: nowrap;
-  font-size: 13px;
-  line-height: 1.2;
-}
 
 .dot {
   width: 9px;
@@ -371,8 +262,7 @@ button.icon-text-btn { padding: 9px 14px; }
 .summary-body .reading-col.settle { animation: settle-in 0.4s ease-out; }
 
 /* 按压反馈：所有可点元素按下时轻微缩小 */
-button:active,
-.model-btn:active {
+button:active {
   transform: scale(0.98);
 }
 
@@ -443,7 +333,6 @@ button:active,
   border-radius: 12px;
   box-shadow: var(--shadow-card);
   overflow: hidden;
-  cursor: pointer;
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s, flex-grow 0.2s ease-out;
 }
 .row:hover {
@@ -464,7 +353,47 @@ button:active,
   min-height: 22px;
 }
 
-.row-name { font-weight: 600; font-size: 12px; line-height: 1.2; }
+.row-name {
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer; /* 单击全屏打开该家网页 */
+}
+/* 行头身份区（原上部模型栏并入）：加载灯只在异常时显示（橙=加载中、红=失败） */
+.row-dot {
+  display: none;
+  width: 8px;
+  height: 8px;
+}
+.row-dot.loading { display: block; background: var(--warn); }
+.row-dot.error { display: block; background: var(--err); }
+/* 品牌徽章：官方 logo（assets/logos/<id>.png）；素材缺失时回退品牌色方块+首字 */
+.row-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  flex: 0 0 auto;
+  overflow: hidden;
+  cursor: pointer;
+}
+.row-logo .badge-logo {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.row-logo.has-logo { background: transparent !important; font-size: 0; }
+.row-logo.has-logo .badge-logo { display: block; }
+.row-name:hover { color: var(--accent); }
+/* 未勾选参与的家整行置灰（行不隐藏，9 行均分布局保持完整） */
+.row.unchecked { opacity: 0.5; }
 
 /* 状态胶囊：默认灰，发送中蓝、生成中橙、完成绿、失败红，一色一阶段；
    文字只保留短状态，操作引导放 tooltip */
@@ -514,7 +443,14 @@ button:active,
 }
 .row-verify:hover { border-color: var(--warn); filter: brightness(1.1); }
 
-.row-caret { color: var(--text-dim); font-size: 10px; transition: transform 0.15s; }
+.row-caret {
+  color: var(--text-dim);
+  font-size: 10px;
+  transition: transform 0.15s;
+  cursor: pointer;
+  padding: 2px 3px;
+}
+.row-caret:hover { color: var(--accent); }
 /* I2：展开态--caret 转向、行占约 3 倍空间（其余行自动压缩，仍不出滚动条） */
 .row.expanded .row-caret { transform: rotate(90deg); }
 .row.expanded { flex: 3.4 1 0; border-color: var(--accent); }
@@ -530,7 +466,8 @@ button:active,
   scrollbar-width: thin;
   cursor: auto;
 }
-.row-full.empty { color: var(--text-dim); white-space: pre-wrap; }
+/* 空态展开区整体隐藏：行体占位文本（如"尚未发送"）是唯一显示，不在下方再重复一份 */
+.row-full.empty { display: none; }
 .row-full .md h1, .row-full .md h2, .row-full .md h3 { margin: 8px 0 4px; font-size: 13px; }
 .row-full .md p { margin: 4px 0; }
 .row-full .md ul, .row-full .md ol { margin: 4px 0; padding-left: 18px; }
@@ -554,6 +491,7 @@ button:active,
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+  cursor: pointer; /* 单击全屏打开该家网页 */
 }
 .row-body.placeholder { color: var(--text-dim); }
 .row-body.error { color: var(--err); }
@@ -754,7 +692,7 @@ button:active,
   pointer-events: auto;
 }
 
-.topbar, #model-bar, #output {
+.topbar, #output {
   position: relative;
   z-index: 1;
 }
@@ -910,6 +848,20 @@ button:active,
 
 /* ---------- 历史记录弹窗（左列表右详情） ---------- */
 .modal-wide { width: 920px; max-width: 94vw; }
+/* 历史弹窗整体不滚动（去掉弹窗级滚动条）：高度吃满可用视口，
+   标题/按钮行固定不压缩，左列表与右详情两栏随弹窗伸缩、内部各自滚动 */
+.modal-history {
+  height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-history h2,
+.modal-history .modal-actions { flex: none; }
+.modal-history .history-cols {
+  flex: 1;
+  min-height: 0;
+}
 
 .history-cols {
   display: flex;
@@ -920,6 +872,7 @@ button:active,
 .history-left {
   flex: 0 0 320px;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -943,7 +896,8 @@ button:active,
 .history-toolbar input:focus { border-color: var(--accent); }
 
 .history-list {
-  height: 480px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -964,11 +918,46 @@ button:active,
 .history-detail {
   flex: 1;
   min-width: 0;
-  height: 480px;
-  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   text-align: left;
   padding-left: 14px;
   border-left: 1px solid var(--border);
+}
+/* 详情顶部工具条：固定在详情列顶部（内容区在下方独立滚动，无需 sticky） */
+.hd-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 8px 8px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hd-delete.confirm { color: var(--err); border-color: var(--err); }
+/* 详情两栏：左侧纵向章节目录（与主界面总结目录同构）+ 右侧内容独立滚动 */
+.hd-detail-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.hd-toc {
+  flex: 0 0 auto;
+  max-width: 45%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--bg-header);
+  border-right: 1px solid var(--border);
+}
+.hd-toc[hidden] { display: none; }
+.hd-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 8px 2px 8px 0;
 }
 .hd-q { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
 .hd-section {
@@ -1035,12 +1024,6 @@ button:active,
   border-left: 3px solid var(--border);
 }
 .skel-line.dim { font-weight: 400; opacity: 0.7; }
-.skel-hint {
-  margin-top: 14px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--text-dim);
-}
 
 /* ---------- 设置弹窗：参与各家 / 发送快捷键 分区 ---------- */
 .cfg-section {
@@ -1106,34 +1089,45 @@ button:active,
   background: transparent;
 }
 
-/* ---------- I7：首次使用轻引导（一次性气泡） ---------- */
-.guide-bubble {
-  position: fixed;
-  top: 132px; /* 输入框 + 模型栏之下，居中悬浮 */
-  left: 50%;
-  transform: translateX(-50%);
-  width: 480px;
-  max-width: 92vw;
-  background: var(--bg-panel);
-  border: 1px solid var(--accent);
-  border-radius: 12px;
-  box-shadow: var(--shadow-card-hover);
-  padding: 14px 16px;
-  z-index: 90; /* 高于常规内容、低于设置/历史弹窗(100) */
-  animation: row-in 0.3s ease-out;
+/* ---------- I7：首次使用向导（步骤条 + 登录清单 + 总结方式） ---------- */
+/* z-index 低于全屏面板(70)：点「去登录」时面板盖住向导，关闭后自动回到向导 */
+.wizard-mask { z-index: 60; }
+.modal-wizard { width: 640px; }
+.wizard-crumbs { color: var(--text-dim); font-size: 12.5px; margin: -6px 0 14px; letter-spacing: 0.5px; }
+.wizard-page h2 { margin-bottom: 10px; }
+.wz-lead { margin: 0 0 10px; line-height: 1.7; }
+.wz-preview { margin: 0 0 10px; padding-left: 20px; line-height: 1.9; }
+.wz-note { margin: 10px 0 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
+/* 登录清单：两列网格（9 行 5+4），行内 品牌 logo + 名称 + 状态 + 去登录 */
+.wz-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 14px;
+  margin: 4px 0 6px;
 }
-.guide-title { font-weight: 700; font-size: 14px; margin-bottom: 8px; }
-.guide-steps { margin: 0; padding-left: 18px; }
-.guide-steps li { margin: 6px 0; font-size: 13px; line-height: 1.65; color: var(--text); }
-.guide-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
-.guide-close {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  padding: 2px 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 13px;
+.wz-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
-.guide-close:hover { color: var(--text); background: var(--dim-soft); }
+.wz-row .cfg-dot { flex: none; }
+.wz-name { font-size: 13px; }
+.wz-state { margin-left: auto; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.wz-state.ok { color: var(--ok); }
+.wz-state.bad { color: var(--err); }
+.wz-subbox {
+  margin: 8px 0 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.wz-subbox label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.wz-sum-line { display: flex; align-items: center; gap: 10px; }
+.wz-sum-line select { max-width: 130px; }
+.wz-tips { margin: 0; padding-left: 20px; line-height: 1.95; }
+.wizard-footer { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+.wz-spacer { flex: 1; }
+#cfg-guide { margin-right: auto; } /* 设置弹窗里左置，与 保存/取消 分开 */

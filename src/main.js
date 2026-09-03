@@ -86,11 +86,11 @@ let mainWindow = null;
 // requestId -> { source:'http', httpRes?, question, watchdog? }，结果回来时按来源路由
 const pendingRounds = new Map();
 
-// 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 12 分钟
-// （轮次等待 420s + 网页总结 300s + 发送/抓取余量）。超过 15 分钟仍无回报，
+// 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 20 分钟
+// （轮次等待 900s + 网页总结 300s + 发送/抓取余量）。超过 25 分钟仍无回报，
 // 基本可判定 renderer 崩溃/卡死——若不主动释放，pendingRounds 永久非空，
 // HTTP 接口会一直 busy/429，整个服务卡死到重启。这里兜底清理并回报超时。
-const ROUND_WATCHDOG_MS = 15 * 60 * 1000;
+const ROUND_WATCHDOG_MS = 25 * 60 * 1000;
 function armRoundWatchdog(requestId) {
   const pending = pendingRounds.get(requestId);
   if (!pending) return;
@@ -100,7 +100,7 @@ function armRoundWatchdog(requestId) {
     console.error(`[watchdog] 轮次 ${requestId} 超过 ${ROUND_WATCHDOG_MS / 60000} 分钟未回报，强制释放 busy`);
     if (pending.source === 'http' && pending.httpRes) {
       try {
-        jsonResponse(pending.httpRes, 504, { ok: false, error: 'round-timeout', message: '本轮处理超时（15 分钟未回报），请重试' });
+        jsonResponse(pending.httpRes, 504, { ok: false, error: 'round-timeout', message: '本轮处理超时（25 分钟未回报），请重试' });
       } catch {}
     }
   }, ROUND_WATCHDOG_MS);
@@ -404,6 +404,19 @@ ipcMain.on('save-history', (_event, entry) => {
 });
 // 桌面端历史弹窗查询
 ipcMain.handle('get-history', (_event, q, limit) => history.query(q || '', limit || 20));
+// 删除单条历史记录；记录若带总结 docx 附件一并清理（仅限 summaries 目录内，防误删）
+ipcMain.handle('delete-history', (_event, id) => {
+  const entry = history.query('', 10000).find((e) => e.id === id);
+  const ok = history.remove(id);
+  if (ok && entry && entry.summaryFile) {
+    try {
+      const p = path.resolve(entry.summaryFile);
+      const dir = path.resolve(app.getPath('userData'), 'summaries');
+      if (p.startsWith(dir + path.sep)) fs.unlink(p, () => {});
+    } catch {}
+  }
+  return ok;
+});
 
 // 总结导出：md 直接写盘；pdf 以调用方拼好的自包含 HTML 为中转——写入临时文件、
 // 离屏窗口加载后 printToPDF（A4 带背景），临时 html 无论成败都清理。

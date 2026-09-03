@@ -24,29 +24,22 @@
     </div>
   </header>
 
-  <!-- 第二层：已选计数（点击进设置调整参与各家）+ 各家按钮（单击全屏打开） -->
-  <nav id="model-bar">
-    <div class="subset-ctrl">
-      <span id="subset-count" class="subset-count">已选 8/8</span>
-    </div>
-    <div id="model-grid"></div>
-  </nav>
-
-  <!-- 模型栏与输出区之间的横向分隔条（拖拽调整模型栏高度） -->
+  <!-- 横向分隔条（拖拽调整输入框高度） -->
   <div id="h-divider" title="拖拽调整输入框高度"></div>
 
-  <!-- 第三层：输出层（左：各家回复；右：LLM 总结） -->
+  <!-- 输出层（左：各家回复行=唯一模型入口；右：LLM 总结） -->
   <main id="output">
     <div class="progress-row">
       <span id="progress-text">尚未开始</span>
       <div id="progress-bar"><div id="progress-fill"></div></div>
+      <span id="subset-count" class="subset-count" title="点击打开「设置」调整参与各家">已选 9/9</span>
     </div>
     <div class="output-cols">
       <div id="rows"></div>
       <div id="divider" title="拖拽调整左右宽度"></div>
       <div id="summary-panel">
         <div class="summary-head">
-          <span id="summary-title" title="点开 DeepSeek 总结账号页面（手动登录第二账号用）">📋 总结</span>
+          <span id="summary-title" title="点开总结账号页面（手动登录总结专用账号用）">📋 总结</span>
           <span class="summary-actions">
             <button id="sum-account-btn" class="mini" title="全屏打开总结账号页面（登录/查看）">账号</button>
             <button id="summary-copy" class="mini" title="复制总结全文">复制</button>
@@ -75,7 +68,7 @@
           </div>
           <!-- 空态：紧凑全篇示意（一级标题不空行），总结生成后由 JS 整体替换。
                注意标签间不留空白文本节点：pre-wrap 下缩进换行会被渲染成空行 -->
-          <div id="summary-body" class="summary-body placeholder"><div class="reading-col"><div class="skel-outline"><div class="skel-line">一、主要共识</div><div class="skel-line">二、次要共识</div><div class="skel-line">三、分歧观点</div><div class="skel-line">四、个性观点</div><div class="skel-line">五、综合意见</div><div class="skel-line dim">附录：各家意见</div></div><div class="skel-hint">各家回答完毕后，点击「总结」生成五段圆桌总结</div></div></div>
+          <div id="summary-body" class="summary-body placeholder"><div class="reading-col"><div class="skel-outline"><div class="skel-line">一、主要共识</div><div class="skel-line">二、次要共识</div><div class="skel-line">三、分歧观点</div><div class="skel-line">四、个性观点</div><div class="skel-line">五、综合意见</div><div class="skel-line dim">附录：各家意见</div></div></div></div>
         </div>
       </div>
     </div>
@@ -96,7 +89,7 @@
             <label class="cfg-check cfg-sum-line">
               <input type="radio" name="cfg-summary-mode" id="cfg-mode-web" checked>
               网页总结
-              <select id="cfg-sum-model" title="网页总结用哪一家生成五段总结（仅列出可在对话框上传文件的模型，附件可突破字数限制完整输入）"></select>
+              <select id="cfg-sum-model" title="网页总结用哪一家生成五段总结（支持附件直传的模型可完整输入各家原文；不支持时自动回退文本模式，每家截断 2000 字）"></select>
             </label>
             <label class="cfg-check">
               <input type="radio" name="cfg-summary-mode" id="cfg-mode-api">
@@ -161,15 +154,16 @@
         </div>
       </div>
       <div class="modal-actions">
+        <button id="cfg-guide" class="mini" title="重新打开首次使用向导（逐家登录 / 总结方式）">新手引导</button>
         <button id="cfg-save" class="primary">保存</button>
         <button id="cfg-cancel">取消</button>
       </div>
     </div>
   </div>
 
-  <!-- 历史记录弹窗：左列表右详情 -->
+  <!-- 历史记录弹窗：左列表右详情（整体不滚动，两栏内部各自滚动） -->
   <div id="history-modal" class="modal-mask" hidden>
-    <div class="modal modal-wide">
+    <div class="modal modal-wide modal-history">
       <button class="modal-close" id="history-close-x" title="关闭">✕</button>
       <h2>历史记录</h2>
       <div class="history-cols">

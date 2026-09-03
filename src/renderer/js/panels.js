@@ -1,38 +1,53 @@
 /* global ADAPTERS, SUMMARIZER */
 /**
  * 面板与视觉状态层。
- * 职责：9+1 个 webview 面板/模型按钮/回复行的构建与视觉状态（状态灯、状态胶囊、
- * 参与选择、行展开手风琴、全屏浮层切换、总结者面板重建）。
+ * 职责：9+1 个 webview 面板/回复行（行头即每家唯一模型入口）的构建与视觉状态
+ * （加载灯、可点家名全屏、状态胶囊、参与置灰、行展开手风琴、全屏浮层切换、
+ * 总结者面板重建）。
  * 依赖：js/core.js（execInPanel）；轮次生命周期见 js/engine.js。
  */
 
 // ================= 状态 =================
-// id -> { adapter, webview, dot(面板内), barBtn(第二层按钮), statusEl, rowStateEl, rowBodyEl,
-//         row, state: idle|sending|generating|done|error, lastText, stableCount, reply }
+// id -> { adapter, webview, dot(面板内), rowDot(行头灯), rowNameEl(行头家名),
+//         statusEl, rowStateEl, rowBodyEl, row,
+//         state: idle|sending|generating|done|error, lastText, stableCount, reply }
 const panels = new Map();
 
-// 总结模型白名单：仅「网页对话框可直接上传文件」的模型（附件 docx/md 可突破
-// 输入框字数限制，完整输入 9 家原文）。2026-08-25 实测：DeepSeek/MiMo 接受
-// docx/doc/md；其余家无现成文件框（回退文本模式每家截断 2000 字）或仅接受图片。
-// 注意必须声明在使用之前：rebuildSummarizerPanel() 在文件头部即会取该名单。
-const SUM_MODEL_ALLOWED = ['deepseek', 'mimo'];
+// 总结模型白名单：全部 9 家均可选用。附件直传能力有差异（2026-09-01 CDP 实测
+// 各家常驻 input[type=file] 的 accept）：
+//  - deepseek/mimo：实测附件直传可用（docx/doc/md），完整输入 9 家原文；
+//  - doubao：文件框常驻且 accept 明确含 docx/md（总结流程未实测）；
+//  - 其余家无常驻文件框或仅图片：附件上传失败自动回退文本模式（每家截断 2000 字）。
+// 顺序即下拉展示顺序：附件直传能力强的排前面。
+const SUM_MODEL_ALLOWED = [
+  'deepseek', 'doubao', 'mimo', 'kimi',
+  'zhipu', 'qwen', 'yuanbao', 'wenxin', 'minimax',
+];
 
 const dock = document.getElementById('dock');
-const modelGrid = document.getElementById('model-grid');
 const rowsEl = document.getElementById('rows');
 const subsetCountEl = document.getElementById('subset-count');
 
 // ================= webview 面板（dock 隐藏层 + 全屏浮层） =================
+// 聚焦必须互斥：.focused 全屏面板同 z-index 叠放、按 DOM 顺序盖住彼此，而总结者
+// 面板在 dock 里最后创建——若不先清旧的，总结进行中（总结者被程序化聚焦长达 300s）
+// 再点任何模型按钮，新面板会被总结者页面压住，表现为"点哪家打开的都是总结页"。
+function clearFocusedPanels() {
+  for (const el of document.querySelectorAll('.webview-panel.focused')) {
+    el.classList.remove('focused');
+  }
+}
+
 function focusPanel(id) {
   const p = panels.get(id) || (id === 'summarizer' ? summarizerPanel : null);
   if (!p) return;
+  clearFocusedPanels();
   p.panelEl.classList.add('focused');
   dock.classList.add('active');
 }
 
 function unfocusPanel() {
-  const focused = document.querySelector('.webview-panel.focused');
-  if (focused) focused.classList.remove('focused');
+  clearFocusedPanels();
   dock.classList.remove('active');
   scheduleVerifyResends(); // I3：从「去验证」全屏返回 -> 自动补发该家
 }
@@ -40,9 +55,6 @@ function unfocusPanel() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') unfocusPanel();
 });
-
-// 模型按钮栅格按适配器数量 N 等分（7→8 家时无需改 CSS）
-modelGrid.style.gridTemplateColumns = `repeat(${ADAPTERS.length}, 1fr)`; // 9 列均分，窄屏由容器查询缩字号/只留 logo
 
 // 各家品牌色（徽章底色，近似值；未列出的用主色兜底）
 const BRAND_COLORS = {
@@ -89,35 +101,40 @@ for (const adapter of ADAPTERS) {
   panelEl.appendChild(webview);
   dock.appendChild(panelEl);
 
-  // 第二层按钮：品牌徽章 + 名称。单击=全屏打开该网页（手动登录/查看/补发）；
-  // 是否参与本轮提问在「设置」里勾选，按钮明暗仅作参与状态展示
-  const barBtn = document.createElement('div');
-  barBtn.className = 'model-btn checked';
-  barBtn.innerHTML =
-    `<span class="model-badge" data-id="${adapter.id}">${adapter.name[0]}</span>` +
-    `<span class="model-name" data-id="${adapter.id}">${adapter.name}</span>` +
-    `<span class="model-status"></span>`;
-  barBtn.querySelector('.model-badge').style.background =
-    BRAND_COLORS[adapter.id] || 'var(--accent)';
-  attachBadgeLogo(barBtn.querySelector('.model-badge'), adapter.id);
-  barBtn.addEventListener('click', () => focusPanel(adapter.id));
-  modelGrid.appendChild(barBtn);
-
-  // 第三层回复行（行内始终显示回复预览；点击就地展开全文，I2）
+  // 回复行 = 每家的唯一身份位（原上部模型栏已并入此处）：
+  //   加载灯（异常时显示）+ logo + 家名（单击全屏打开网页）+ 轮次胶囊
+  //   + 🛡去验证 + ↻重发 + ▸展开全文。是否参与本轮在「设置」勾选（未选行置灰）
   const row = document.createElement('div');
   row.className = 'row';
   row.innerHTML = `
     <div class="row-head">
+      <span class="dot row-dot" title="网页加载状态（橙=加载中，红=失败）"></span>
+      <span class="row-logo">${adapter.name[0]}</span>
       <span class="row-name">${adapter.name}</span>
       <span class="row-state">待发送</span>
       <button class="mini row-verify" hidden title="全屏打开该家完成登录/验证，回来后自动补发">🛡 去验证</button>
       <button class="mini row-resend" title="仅重发该家（不影响其他家）">↻</button>
-      <span class="row-caret">›</span>
+      <span class="row-caret" title="展开 / 收起回复全文">›</span>
     </div>
-    <div class="row-body placeholder">尚未发送</div>
+    <div class="row-body placeholder" title="单击全屏打开该家网页（登录 / 查看 / 手动操作）">尚未发送</div>
     <div class="row-full" hidden></div>
   `;
-  row.addEventListener('click', () => toggleRowExpand(entry));
+  const rowLogo = row.querySelector('.row-logo');
+  rowLogo.style.background = BRAND_COLORS[adapter.id] || 'var(--accent)';
+  attachBadgeLogo(rowLogo, adapter.id);
+  // 全屏入口：行头家名/logo 与 行体；展开/收起全文只归 ▸ 三角管（行体点击不展开，
+  // 展开后的正文区可自由选择复制，点击不会误收起）
+  const openPanel = (e) => {
+    e.stopPropagation();
+    focusPanel(adapter.id);
+  };
+  rowLogo.addEventListener('click', openPanel);
+  row.querySelector('.row-name').addEventListener('click', openPanel);
+  row.querySelector('.row-body').addEventListener('click', openPanel);
+  row.querySelector('.row-caret').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleRowExpand(entry);
+  });
   // 单家补发：只重发该家，阻止冒泡避免触发行点击跳转
   row.querySelector('.row-resend').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -137,9 +154,9 @@ for (const adapter of ADAPTERS) {
     panelEl,
     webview,
     row,
-    barBtn,
     dot: panelEl.querySelector('.dot'),
-    statusDot: barBtn.querySelector('.model-status'),
+    rowDot: row.querySelector('.row-dot'),
+    rowNameEl: row.querySelector('.row-name'),
     statusEl: panelEl.querySelector('.panel-status'),
     rowStateEl: row.querySelector('.row-state'),
     rowResendBtn: row.querySelector('.row-resend'),
@@ -277,12 +294,13 @@ const DOT_LABELS = {
 
 function setDots(p, state) {
   p.dot.className = 'dot' + (state ? ` ${state}` : '');
-  // 网页状态用按钮右上角小圆点表达（绿=就绪/橙=加载/红=失败），边框/明暗只表达是否参与本轮
-  p.statusDot.className = 'model-status' + (state ? ` ${state}` : '');
+  // 网页状态用行头小圆点表达，只在异常时显示（橙=加载中、红=加载失败）；
+  // 绿色"就绪"启动后几乎永远常亮、信息量低，不显示（沿用原模型栏口径），
+  // 状态文字在家名 tooltip 里
+  p.rowDot.className = 'dot row-dot' + (state ? ` ${state}` : '');
   const label = DOT_LABELS[state] || state || '';
-  p.statusDot.title = `${p.adapter.name}：${label || '未加载'}`;
-  p.barBtn.title =
-    `${p.adapter.name}${label ? `：${label}` : ''} · 单击全屏打开；参与选择在「设置」`;
+  p.rowNameEl.title =
+    `${p.adapter.name}${label ? `：${label}` : ''} · 单击全屏打开该家网页（登录/查看）；参与选择在「设置」`;
 }
 
 // 本轮参与选择：持久化在 localStorage（设置弹窗勾选；缺省=全部）
@@ -294,12 +312,12 @@ function getSelectedIds() {
   return [...panels.keys()];
 }
 
-// 把存储的选择应用到模型按钮（选中=亮，未选=暗）并刷新计数
+// 把存储的选择应用到回复行（未勾选的家整行置灰；行不隐藏，9 行均分布局保持完整）
+// 并刷新计数
 function applySelection() {
   const sel = new Set(getSelectedIds());
   for (const p of panels.values()) {
-    p.barBtn.classList.toggle('checked', sel.has(p.adapter.id));
-    p.barBtn.classList.toggle('unchecked', !sel.has(p.adapter.id));
+    p.row.classList.toggle('unchecked', !sel.has(p.adapter.id));
   }
   updateSubsetCount();
 }
@@ -343,8 +361,10 @@ function setCardState(p, text, cls, errCat) {
 function renderRowFull(p) {
   const text = p.reply || p.lastText || '';
   if (!text) {
+    // 空态不渲染内容：行体占位文本（如"尚未发送"）是唯一显示，
+    // 展开区整体隐藏，不再在下方重复一行相同占位
     p.rowFullEl.className = 'row-full empty';
-    p.rowFullEl.textContent = p.rowBodyEl.textContent || '（暂无内容）';
+    p.rowFullEl.replaceChildren();
     return;
   }
   p.rowFullEl.className = 'row-full';

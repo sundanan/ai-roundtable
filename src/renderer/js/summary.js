@@ -180,6 +180,51 @@ summaryBody.addEventListener('scroll', () => {
   });
 });
 
+// 当前总结模型的基础站名（如「DeepSeek」「豆包」）：提示与报错文案跟随所选模型，
+// 不再写死 DeepSeek（总结模型已扩充到全部 9 家）
+function summarizerBaseName() {
+  const ad = ADAPTERS.find((a) => a.id === getSummarizerSiteId());
+  return (ad && ad.name) || '总结模型';
+}
+
+// 复位总结面板到空态骨架（「＋ 新问题」配套）：清掉上一轮总结、目录与状态，
+// lastSummary 一并清空——复制/导出按钮随之失效，避免复制到已不可见的内容
+function resetSummaryPanel() {
+  lastSummary = '';
+  summaryAnchors.clear();
+  tocAnchors = [];
+  summaryStatus.textContent = '';
+  summaryStatus.className = 'card-state';
+  summaryToc.innerHTML = '';
+  for (const label of TOC_SECTIONS) {
+    const chip = document.createElement('span');
+    chip.className = 'toc-chip toc-static';
+    chip.textContent = label;
+    summaryToc.appendChild(chip);
+  }
+  const sep = document.createElement('span');
+  sep.className = 'toc-sep';
+  summaryToc.appendChild(sep);
+  const groupChip = document.createElement('span');
+  groupChip.className = 'toc-chip toc-static';
+  groupChip.textContent = '各家意见';
+  summaryToc.appendChild(groupChip);
+  summaryToc.hidden = false;
+  summaryBody.className = 'summary-body placeholder';
+  const readingCol = document.createElement('div');
+  readingCol.className = 'reading-col';
+  const outline = document.createElement('div');
+  outline.className = 'skel-outline';
+  for (const line of [...TOC_SECTIONS.map((t, i) => `${'一二三四五'[i]}、${t}`), '附录：各家意见']) {
+    const el = document.createElement('div');
+    el.className = 'skel-line' + (line.startsWith('附录') ? ' dim' : '');
+    el.textContent = line;
+    outline.appendChild(el);
+  }
+  readingCol.appendChild(outline);
+  summaryBody.replaceChildren(readingCol);
+}
+
 // 圆桌总结模板（五段结构）。内容要求两种模式共用；排版要求分模式，原因：
 // - API 模式：原始文本直接返回，单换行天然保留 → 用「纯文本 + 单换行」即可；
 // - 网页模式：输出要经「DeepSeek 页面渲染 → innerText 抓取」，单换行会被 Markdown
@@ -241,7 +286,7 @@ async function doSummarize() {
   summaryBody.textContent =
     settings.summaryMode === 'api'
       ? `正在调用 ${settings.model} 总结…`
-      : '正在 DeepSeek 网页（第二账号）生成总结…';
+      : `正在 ${summarizerBaseName()} 网页（第二账号）生成总结…`;
   summaryStatus.textContent = '总结中…';
   summaryStatus.className = 'card-state warn';
   summaryToc.hidden = true; // 新一轮总结生成前隐藏旧目录
@@ -352,6 +397,18 @@ function buildWebSummaryPrompt(usable, skipped) {
   );
 }
 
+// 通用附件按钮候选：与 SUMMARIZER.uploadSelectors 同口径。总结模型已扩充到全部
+// 9 家，多数适配器没有专属 uploadSelectors——没有时用这份通用候选兜底
+// （点开懒加载的附件按钮让 input[type=file] 进 DOM，再 CDP 直塞）
+const GENERIC_UPLOAD_SELECTORS = [
+  '[class*="attach" i]',
+  '[aria-label*="附件" i]',
+  '[aria-label*="upload" i]',
+  '[data-testid*="attach" i]',
+  '[class*="upload" i]',
+  '[class*="clip" i]',
+];
+
 // 把附件文件上传进总结者页面：优先直接找 input[type=file]（CDP 直塞文件）；
 // 找不到时按 uploadSelectors 逐个点击附件按钮候选，等它进 DOM 再试。成功返回 true。
 // ad 由调用方传入（总结者适配器随设置切换，不是全局量——此前直接引用 summarizeViaWeb
@@ -368,7 +425,7 @@ async function tryUploadFile(sp, ad, filePath) {
     await setFiles();
     return true;
   } catch {}
-  for (const sel of (ad && ad.uploadSelectors) || []) {
+  for (const sel of (ad && ad.uploadSelectors) || GENERIC_UPLOAD_SELECTORS) {
     try {
       const clicked = await execInPanel(
         sp.webview,
@@ -455,7 +512,7 @@ async function summarizeViaWeb(usable, skipped) {
   if (!res || !res.ok) {
     setStatus(sp.statusEl, '发送失败');
     throw new Error(
-      `DeepSeek 总结发送失败：${(res && res.error) || '未知'}。若尚未登录，请在全屏页面手动登录第二个账号后再点「总结」`
+      `${summarizerBaseName()} 总结发送失败：${(res && res.error) || '未知'}。若尚未登录，请在全屏页面手动登录总结专用账号后再点「总结」`
     );
   }
   setStatus(sp.statusEl, '生成中…');
@@ -501,7 +558,7 @@ async function summarizeViaWeb(usable, skipped) {
     }
   }
   setStatus(sp.statusEl, '等待超时');
-  throw new Error('DeepSeek 网页总结等待超时（300 秒），请再点「总结」重试，或在设置中改用 API 总结');
+  throw new Error(`${summarizerBaseName()} 网页总结等待超时（300 秒），请再点「总结」重试，或在设置中改用 API 总结`);
 }
 
 // 等进行中的总结收尾后再总结（服务轮次用）：自动总结可能恰好在跑，
@@ -604,8 +661,10 @@ for (const item of exportMenu.querySelectorAll('.export-item')) {
 }
 
 // 自包含导出 HTML：复用界面同款 renderMarkdown（表格/五段标题结构一致），
-// 但用打印向的浅色独立排版（与界面主题无关）；printToPDF 按此渲染 A4
-function buildExportHtml(question, summaryMd, d) {
+// 但用打印向的浅色独立排版（与界面主题无关）；printToPDF 按此渲染 A4。
+// metaLabel：页眉标签（总结面板导出为「AI 圆桌总结」，历史记录导出传「AI 圆桌记录」）
+function buildExportHtml(question, summaryMd, d, metaLabel) {
+  const label = metaLabel || 'AI 圆桌总结';
   const escQ = String(question || 'AI 圆桌总结')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<!DOCTYPE html>
@@ -640,7 +699,7 @@ function buildExportHtml(question, summaryMd, d) {
 </head>
 <body>
 <h1>${escQ}</h1>
-<p class="meta">AI 圆桌总结 · 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}</p>
+<p class="meta">${label} · 生成时间：${d.toLocaleString('zh-CN', { hour12: false })}</p>
 <div class="md">${renderMarkdown(summaryMd)}</div>
 </body>
 </html>`;

@@ -52,6 +52,24 @@ function saveRound(entry) {
   }
 }
 
+// 按 id 删除单条记录（同步内存缓存 + 原子写盘）；返回是否删除了条目
+function remove(id) {
+  try {
+    const list = ensureLoaded();
+    const idx = list.findIndex((e) => e.id === id);
+    if (idx === -1) return false;
+    list.splice(idx, 1);
+    cache = list;
+    const tmp = getPath() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(cache));
+    fs.renameSync(tmp, getPath());
+    return true;
+  } catch (e) {
+    console.error('[history] 删除失败:', e && e.message);
+    return false;
+  }
+}
+
 // 按问题关键词过滤，最新在前，返回前 limit 条（返回副本，调用方改动不影响缓存）
 function query(keyword, limit) {
   let list = ensureLoaded().slice();
@@ -62,4 +80,4 @@ function query(keyword, limit) {
   return list.reverse().slice(0, limit || 10);
 }
 
-module.exports = { saveRound, query, getPath };
+module.exports = { saveRound, query, remove, getPath };

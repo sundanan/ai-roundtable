@@ -67,13 +67,13 @@ systemd 用户服务开机自启（经 `~/.config/autostart/ai-roundtable.deskto
 | 方法 路径 | 说明 |
 |---|---|
 | `GET /health` | `{ok, ready}` 探活 |
-| `POST /ask` | body `{question, sites?, async?}`；同步跑一轮返回 `{ok, question, summary, summaryError, summaryFile, replies[]}`；`sites` 为可选子集（id 数组）；`async:true` 受理即返回 202 `{requestId, poll}`，结果经 `/ask/status` 轮询（一轮最坏 ≈12 分钟，长任务推荐异步）；同一时间只跑一轮，并发返回 busy；`summaryFile` 为总结 docx 的本机绝对路径（生成失败为空） |
+| `POST /ask` | body `{question, sites?, async?}`；同步跑一轮返回 `{ok, question, summary, summaryError, summaryFile, replies[]}`；`sites` 为可选子集（id 数组）；`async:true` 受理即返回 202 `{requestId, poll}`，结果经 `/ask/status` 轮询（一轮最坏 ≈20 分钟，长任务推荐异步）；同一时间只跑一轮，并发返回 busy；`summaryFile` 为总结 docx 的本机绝对路径（生成失败为空） |
 | `GET /ask/status?id=xxx` | 异步轮次状态：`running` / `done`（含完整结果）/ `not-found` |
 | `GET /history?limit=N&q=关键词` | 历史列表 `{items:[{id,ts,question,summary,count}]}` |
 | `GET /history/item?id=xxx` | 单轮完整内容 `{item:{summary, replies[]}}` |
 
 ```bash
-curl -sS --max-time 460 -X POST http://127.0.0.1:8765/ask \
+curl -sS --max-time 960 -X POST http://127.0.0.1:8765/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"用一句话介绍杭州","sites":["qwen","deepseek"]}'
 ```
@@ -106,7 +106,7 @@ curl -sS --max-time 460 -X POST http://127.0.0.1:8765/ask \
 ## 已知限制
 
 - 强依赖各家网页结构，改版即需适配（这是此类方案的固有代价）；
-- 深度思考/联网研究耗时长的回答可能超出单轮上限（默认 7 分钟）；
+- 深度思考/联网研究耗时长的回答可能超出单轮上限（默认 15 分钟）；
 - 单轮串行（桌面 GUI 与 HTTP/agent 互斥），一次只跑一个提问；
 - 已支持 deb（arm64）、Windows NSIS、macOS 安装包构建（`npm run dist:deb` 与 `scripts/build-*.sh`，本机交叉构建）。
 

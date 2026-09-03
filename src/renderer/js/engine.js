@@ -118,6 +118,9 @@ async function broadcast(text, siteIds) {
   roundAborted = false; // 新一轮开始，清除上一轮的停止标记
   // 按钮切「⏹ 停止」不在这里手工改写：下方标记面板 sending 后由 updateProgress 统一驱动
   currentQuestion = text;
+  // 微信/agent 发起的轮次：问题同步显示到输入框（桌面端 submit 本就来自输入框）
+  promptEl.value = text;
+  autoGrow();
   desktopRoundSaved = false;
   roundSettleHandled = false;
   // 计算本轮参与面板（改进2：可选子集；缺省全部）
@@ -233,8 +236,11 @@ const POLL_INTERVAL = 3000;
 // 面板级活动看门狗：发送后持续这么久抓取毫无进展（既非 pending 也抓不到文本，
 // 如执行异常/返回空）→ 判错误。兜底"静默卡死"盲区——陈旧检测只覆盖"抓到与基线
 // 相同的旧文本"，抓空/异常会无限空转到轮次上限（2026-08-24 实测千问改版后
-// 420s 零回复且不判错，白白吃满整轮）。适配器可用 stallTimeout 覆盖。
-const PANEL_STALL_MS = 180000;
+// 420s 零回复且不判错，白白吃满整轮）。
+// 180s 曾误杀正常生成：深度思考/联网研究阶段页面可能长时间无可读文本
+// （DeepSeek/MiMo 的思考块还会被剪枝），2026-09 按用户反馈放宽到 7 分钟；
+// 个别家可用适配器 stallTimeout 覆盖。
+const PANEL_STALL_MS = 420000;
 let poller = null;
 
 function startPoller() {
@@ -271,6 +277,45 @@ function stopRound() {
   updateProgress(); // 面板到终态后由 syncSendStopButton 自动复原「发送」
 }
 
+// 「＋ 新问题」配套复位：除清空输入框（ui.js 已做）外，把轮次相关界面全部归位
+// 待命——回复行回「待发送/尚未发送」（含被隐藏的未参与行重新显示）、进度归零、
+// 总结/发送按钮复原、总结面板复位空态骨架（lastSummary 同步清空）。
+// 轮次/总结进行中不做复位，只清输入框。
+function resetToStandby() {
+  if ([...panels.values()].some((p) => p.state === 'sending' || p.state === 'generating')) return;
+  if (serviceBusy || summarizeBusy || activeServiceRequestId) return;
+  roundAborted = false;
+  stopPoller();
+  currentQuestion = '';
+  desktopRoundSaved = false;
+  activeRoundIds = null;
+  for (const p of panels.values()) {
+    collapseRow(p);
+    p.reply = '';
+    p.lastText = '';
+    p.stableCount = 0;
+    p.staleCount = 0;
+    p.baselineText = '';
+    p.genStart = null;
+    p.pendingVerifyResend = false;
+    p.state = 'idle';
+    p.row.style.display = '';
+    p.row.classList.remove('failed');
+    setStatus(p.statusEl, '');
+    setCardState(p, '待发送', '');
+    p.rowBodyEl.className = 'row-body placeholder';
+    p.rowBodyEl.textContent = '尚未发送';
+  }
+  progressText.textContent = '尚未开始';
+  progressFill.style.width = '0%';
+  progressFill.className = '';
+  summarizeBtn.disabled = true;
+  summarizeBtn.textContent = '总结';
+  summarizeBtn.title = '4 家交卷后可提前总结';
+  syncSendStopButton(false);
+  resetSummaryPanel();
+}
+
 async function pollOnce() {
   const tasks = [...panels.values()].map(async (p) => {
     if (p.state === 'done' || p.state === 'idle') return;
@@ -284,7 +329,7 @@ async function pollOnce() {
         setStatus(p.statusEl, '抓取超时（页面无进展）');
         setCardState(p, '抓取超时', 'err');
         p.rowBodyEl.className = 'row-body error';
-        p.rowBodyEl.textContent = '长时间未取到回复进展。可点行尾 ↻ 仅重发该家，或双击全屏手动查看。';
+        p.rowBodyEl.textContent = '长时间未取到回复进展。可点行尾 ↻ 仅重发该家，或点行首家名全屏手动查看。';
         updateProgress();
         return;
       }
@@ -304,7 +349,7 @@ async function pollOnce() {
       setStatus(p.statusEl, res.blocked + '（需人工）');
       setCardState(p, res.blocked, 'err');
       p.rowBodyEl.className = 'row-body error';
-      p.rowBodyEl.textContent = '该站点触发了人机验证，双击按钮全屏完成验证后，点行尾 ↻ 重发该家。';
+      p.rowBodyEl.textContent = '该站点触发了人机验证，点行内「🛡 去验证」或行首家名全屏完成验证后，点行尾 ↻ 重发该家。';
       updateProgress();
       return;
     }
@@ -390,7 +435,7 @@ setInterval(() => {
     const s = Math.floor((Date.now() - p.genStart) / 1000);
     if (s >= 90) {
       setCardState(p, `仍在生成 ${s}s`, 'warn');
-      p.rowStateEl.title = '生成较慢，可单击上方模型按钮全屏查看';
+      p.rowStateEl.title = '生成较慢，可单击行首家名全屏查看';
     } else {
       setCardState(p, `生成中… ${s}s`, 'warn');
       p.rowStateEl.title = '正在生成回复';
@@ -489,9 +534,10 @@ function roundScope() {
 }
 
 // 等待本轮面板到达终态（done/error），或整体超时。
-// 上限放宽到 7 分钟：Kimi 等深度研究常需 5~7 分钟，240s 会在其仍生成时截断丢答案。
+// 上限放宽到 15 分钟：深度研究/长思考类回答可跑到 10 分钟以上，420s 会在其
+// 仍生成时截断丢答案（2026-09 按用户反馈"等单一模型完成太短"放宽）。
 // 所有面板到终态会提前返回，简单轮次不受影响。
-function waitForRoundComplete(timeoutMs = 420000) {
+function waitForRoundComplete(timeoutMs = 900000) {
   return new Promise((resolve) => {
     const start = Date.now();
     const timer = setInterval(() => {

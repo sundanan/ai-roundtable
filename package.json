@@ -1,6 +1,6 @@
 {
   "name": "ai-roundtable",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "AI 圆桌：一个输入框，把问题同时发给 9 个 AI 网页版（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心/MiMo），收集回复并自动汇总",
   "main": "src/main.js",
   "scripts": {

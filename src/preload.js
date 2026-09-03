@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('roundtable', {
   // ===== 历史记录（改进1，桌面端同步）=====
   saveHistory: (entry) => ipcRenderer.send('save-history', entry),
   getHistory: (q, limit) => ipcRenderer.invoke('get-history', q, limit),
+  deleteHistory: (id) => ipcRenderer.invoke('delete-history', id),
 
   // ===== 总结导出（Markdown / PDF，PDF 由主进程 HTML->printToPDF）=====
   exportSummary: (opts) => ipcRenderer.invoke('export-summary', opts),
