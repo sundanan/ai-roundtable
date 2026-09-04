@@ -60,7 +60,7 @@ systemd 用户服务开机自启（经 `~/.config/autostart/ai-roundtable.deskto
 进程崩溃（如 GPU FATAL）5 秒后自动重启；手动方式 `bash service.sh` 仍可用（日志写入 `~/ai-roundtable-service.log`，超 20MB 自动截断）。
 日常管理：`systemctl --user status|restart|stop ai-roundtable`。
 
-关窗不退出，应用隐藏到托盘常驻；托盘菜单可重新显示窗口或退出。
+v1.4 起**关闭窗口默认退出**（HTTP/微信服务随之停止，下次开机自启或手动 `npm start` 再拉起）；需要常驻时在「设置 → 关闭窗口时」切换为「最小化到托盘」，托盘菜单可重新显示窗口或退出。
 
 ## HTTP 接口（仅监听 127.0.0.1）
 

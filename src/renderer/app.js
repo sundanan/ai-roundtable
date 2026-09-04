@@ -15,3 +15,6 @@
 applySelection();
 syncPromptPlaceholder();
 syncSendStopButton(false);
+// 关窗行为启动同步：把存储的设置（退出程序/最小化到托盘）告知主进程，
+// 主进程据此决定关窗即退出还是创建托盘常驻
+applyCloseMode();

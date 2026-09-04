@@ -24,7 +24,10 @@ if (!app.requestSingleInstanceLock()) {
 
 // ===== 托盘常驻 =====
 let tray = null;
-let isQuitting = false; // 仅当从托盘「退出」或系统退出时才真正关闭
+let isQuitting = false; // 仅当真正退出（关窗退出模式 / 托盘「退出」/系统退出）时才关闭
+// 关窗行为：exit=关窗即退出程序（默认，HTTP/微信服务随之停止）；
+// tray=关窗隐藏到系统托盘常驻（托盘仅在常驻模式下存在，由渲染层按存储设置同步）
+let closeMode = 'exit';
 
 function createTray() {
   const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
@@ -522,6 +525,20 @@ ipcMain.handle('set-file-input', async (_event, webContentsId, filePath) => {
   }
 });
 
+// 渲染层同步关窗行为（设置弹窗切换；localStorage 持久化，窗口加载时回传）。
+// 托盘只在「最小化到托盘」模式下存在，切回退出模式时托盘随之移除
+ipcMain.on('set-close-mode', (_event, mode) => {
+  if (mode !== 'exit' && mode !== 'tray') return;
+  if (mode === closeMode) return;
+  closeMode = mode;
+  if (closeMode === 'tray' && !tray) createTray();
+  else if (closeMode === 'exit' && tray) {
+    tray.destroy();
+    tray = null;
+  }
+  console.log(`[close] 关窗行为已切换为: ${closeMode === 'exit' ? '退出程序' : '最小化到托盘'}`);
+});
+
 async function createWindow() {
   // 直接使用工作区（不含任务栏的区域）作为窗口边界，避免底部被任务栏遮挡
   const area = screen.getPrimaryDisplay().workArea;
@@ -548,8 +565,14 @@ async function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   mainWindow = win;
-  // 关窗不退出：隐藏到托盘常驻（仅 isQuitting 时才真正销毁）
+  // 关窗行为：exit 模式下关窗即退出（真正结束进程，HTTP 服务随之停止）；
+  // tray 模式下隐藏到托盘常驻（仅 isQuitting 时才真正销毁）
   win.on('close', (e) => {
+    if (closeMode === 'exit') {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
     if (!isQuitting) {
       e.preventDefault();
       win.hide();
@@ -643,7 +666,8 @@ ipcMain.handle('call-llm', async (event, { baseURL, apiKey, model, messages }) =
 
 app.whenReady().then(() => {
   createWindow();
-  createTray();
+  // 托盘不在启动时创建：默认为「关窗即退出」模式，托盘无意义；
+  // 渲染层加载后会按存储的设置同步（tray 模式下经 set-close-mode 创建）
   // 启动本地 HTTP 接口（仅 127.0.0.1，供 Hermes skill 调用）
   httpServer.on('error', (e) => console.error('[http] 服务启动失败:', e && e.message));
   httpServer.listen(ROUNDTABLE_PORT, '127.0.0.1', () => {

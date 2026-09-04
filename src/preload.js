@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('roundtable', {
   getHistory: (q, limit) => ipcRenderer.invoke('get-history', q, limit),
   deleteHistory: (id) => ipcRenderer.invoke('delete-history', id),
 
+  // ===== 关窗行为（退出程序 / 最小化到托盘常驻）=====
+  setCloseMode: (mode) => ipcRenderer.send('set-close-mode', mode),
+
   // ===== 总结导出（Markdown / PDF，PDF 由主进程 HTML->printToPDF）=====
   exportSummary: (opts) => ipcRenderer.invoke('export-summary', opts),
 

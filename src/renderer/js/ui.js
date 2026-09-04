@@ -53,6 +53,17 @@ function getAutoSummary() {
   return localStorage.getItem('rt_autoSummary') !== '0';
 }
 
+// ================= 关窗行为（退出程序 / 最小化到托盘） =================
+// 默认「退出程序」；选托盘时主进程会创建托盘（微信/HTTP 服务保持常驻）。
+// 持久化在 localStorage，任何变更经 setCloseMode 同步给主进程
+function getCloseMode() {
+  return localStorage.getItem('rt_closeMode') === 'tray' ? 'tray' : 'exit';
+}
+
+function applyCloseMode() {
+  roundtable.setCloseMode(getCloseMode());
+}
+
 function getSettings() {
   return {
     // 总结方式：web=DeepSeek 第二账号网页总结（默认），api=OpenAI 兼容接口
@@ -149,6 +160,8 @@ const cfgAutoSummary = document.getElementById('cfg-autosummary');
 // cfgModelsEl 已在「总结模型选择」区块声明（勾选区 change 事件要早绑）
 const cfgEnterCtrl = document.getElementById('cfg-enter-ctrl');
 const cfgEnterEnter = document.getElementById('cfg-enter-enter');
+const cfgCloseExit = document.getElementById('cfg-close-exit');
+const cfgCloseTray = document.getElementById('cfg-close-tray');
 
 // 参与各家勾选区：按适配器动态生成（官方 logo + 名称），状态在 openSettings 时回填
 for (const a of ADAPTERS) {
@@ -190,6 +203,8 @@ function openSettings() {
   }
   cfgEnterCtrl.checked = !getEnterSend();
   cfgEnterEnter.checked = getEnterSend();
+  cfgCloseExit.checked = getCloseMode() === 'exit';
+  cfgCloseTray.checked = getCloseMode() === 'tray';
   const theme = getThemeSetting();
   cfgThemeAuto.checked = theme === 'auto';
   cfgThemeDark.checked = theme === 'dark';
@@ -229,6 +244,9 @@ function doSaveSettings() {
     .map((cb) => cb.dataset.id);
   localStorage.setItem('rt_selected', JSON.stringify(ids));
   localStorage.setItem('rt_enterSend', cfgEnterEnter.checked ? '1' : '0');
+  // 关窗行为即时同步主进程（exit=关窗即退出；tray=创建托盘常驻）
+  localStorage.setItem('rt_closeMode', cfgCloseTray.checked ? 'tray' : 'exit');
+  applyCloseMode();
   // V4：主题即时生效（跟随系统 / 深色 / 浅色）
   localStorage.setItem('rt_theme',
     cfgThemeDark.checked ? 'dark' : cfgThemeLight.checked ? 'light' : '');
