@@ -12,6 +12,7 @@
   <header class="topbar">
     <div class="composer">
       <button id="new-btn" title="清空输入框，准备新问题">＋</button>
+      <button id="attach-btn" title="添加附件（Word/PDF/MD/TXT，随问题发给各家；个别不支持的家自动纯文本）">📎</button>
       <textarea id="prompt" rows="3"
         placeholder="输入问题，Ctrl+Enter 发送到勾选各家（Enter 换行）"></textarea>
       <div class="composer-actions">
@@ -22,6 +23,7 @@
         <button id="history-btn" title="历史记录">历史</button>
       </div>
     </div>
+    <div id="attach-chips" hidden></div>
   </header>
 
   <!-- 横向分隔条（拖拽调整输入框高度） -->

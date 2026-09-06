@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('roundtable', {
   setThrottling: (webContentsId, allowed) =>
     ipcRenderer.invoke('set-throttling', webContentsId, allowed),
 
+  // ===== 输入框附件（随问题分发给各家）=====
+  chooseAttachment: () => ipcRenderer.invoke('choose-attachment'),
+  attachFile: (webContentsId, filePath, fileName, profile) =>
+    ipcRenderer.invoke('attach-file', webContentsId, filePath, fileName, profile),
+
   // ===== 总结导出（Markdown / PDF，PDF 由主进程 HTML->printToPDF）=====
   exportSummary: (opts) => ipcRenderer.invoke('export-summary', opts),
 

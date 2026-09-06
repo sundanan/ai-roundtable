@@ -595,6 +595,158 @@ ipcMain.handle('set-throttling', (_event, webContentsId, allowed) => {
   return true;
 });
 
+// ===== 输入框附件（随问题分发给各家）=====
+// 选文件：系统对话框，返回磁盘路径（CDP setFileInputFiles 需要真实路径）
+ipcMain.handle('choose-attachment', async () => {
+  if (!mainWindow) return { canceled: true };
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: '选择随问题发送的附件',
+    filters: [{ name: '文档', extensions: ['doc', 'docx', 'md', 'markdown', 'txt', 'pdf'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths.length) return { canceled: true };
+  return { canceled: false, path: filePaths[0], name: path.basename(filePaths[0]) };
+});
+
+// 逐家上传附件（2026-09-06 全量探索标定的各家路径，配置见 adapters.js attach 字段）：
+//   input:'resident' —— 常驻 input[type=file] 直接 setFileInputFiles
+//   entry —— 先可信点击入口（可能弹菜单）；menuText 命中则再可信点菜单项
+//   input:'afterEntry' —— 入口/菜单之后 DOM 查询 input[type=file]；'chooser' —— 拦截
+//   Page.fileChooserOpened 用 backendNodeId 直塞
+// 上传后校验页面出现文件名词干（chip），失败返回 {ok:false} 由调用方降级纯文本
+ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, profile) => {
+  const wc = webContents.fromId(webContentsId);
+  if (!wc) return { ok: false, error: 'webview 未就绪' };
+  if (!profile || !profile.input) return { ok: false, error: 'unsupported' };
+  const dbg = wc.debugger;
+  let attached = false;
+  const chooserEvents = [];
+  const onMessage = (_e, method, params) => {
+    if (method === 'Page.fileChooserOpened') chooserEvents.push(params);
+  };
+  try {
+    await dbg.attach('1.3');
+    attached = true;
+    dbg.on('message', onMessage);
+    await dbg.sendCommand('Page.enable');
+    await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+
+    const evalJs = async (expr) => {
+      const r = await dbg.sendCommand('Runtime.evaluate', { expression: expr, returnByValue: true });
+      if (r.exceptionDetails) throw new Error('evaluate 失败');
+      return r.result ? r.result.value : undefined;
+    };
+    const sleep = (ms) => new Promise((r2) => setTimeout(r2, ms));
+    const trustedClick = (x, y) => {
+      wc.sendInputEvent({ type: 'mouseMoved', x, y });
+      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    };
+    // chip 校验词：文件名词干（≥4 字）优先，否则完整文件名
+    const stem = String(fileName || '').replace(/\.[^.]+$/, '');
+    const chipProbe = `document.body.innerText.indexOf(${JSON.stringify(stem.length >= 4 ? stem : fileName)}) !== -1`;
+
+    const pickInputAndUpload = async () => {
+      const doc = await dbg.sendCommand('DOM.getDocument', { depth: -1 });
+      const res = await dbg.sendCommand('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector: 'input[type=file]' });
+      if (!res.nodeIds.length) return false;
+      const accepts = JSON.parse(await evalJs(`(function () {
+        var out = []; var els = document.querySelectorAll('input[type=file]');
+        for (var i = 0; i < els.length; i++) out.push(els[i].getAttribute('accept') || '');
+        return JSON.stringify(out);
+      })()`));
+      let pick = 0;
+      for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
+      for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
+      await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: res.nodeIds[pick] });
+      await sleep(2500);
+      return !!(await evalJs(chipProbe));
+    };
+
+    if (profile.input === 'resident') {
+      let nodes = null;
+      for (let i = 0; i < 6 && !nodes; i++) {
+        const doc = await dbg.sendCommand('DOM.getDocument', { depth: -1 });
+        const res = await dbg.sendCommand('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector: 'input[type=file]' });
+        if (res.nodeIds.length) { nodes = res; break; }
+        await sleep(800);
+      }
+      if (!nodes) return { ok: false, error: '未找到文件框' };
+      const accepts = JSON.parse(await evalJs(`(function () {
+        var out = []; var els = document.querySelectorAll('input[type=file]');
+        for (var i = 0; i < els.length; i++) out.push(els[i].getAttribute('accept') || '');
+        return JSON.stringify(out);
+      })()`));
+      let pick = 0;
+      for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
+      for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
+      await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: nodes.nodeIds[pick] });
+      await sleep(2500);
+      return { ok: !!(await evalJs(chipProbe)) };
+    }
+
+    // entry 流：逐个候选可信点击 → 菜单 → 文件框/chooser
+    const entries = Array.isArray(profile.entry) ? profile.entry : [profile.entry];
+    const minX = profile.entryMinX || 0;
+    for (const sel of entries) {
+      const rects = JSON.parse(await evalJs(`(function () {
+        var out = [];
+        var els = document.querySelectorAll(${JSON.stringify(sel)});
+        for (var i = 0; i < els.length && out.length < 4; i++) {
+          var r = els[i].getBoundingClientRect();
+          if (!(r.width > 2 && r.height > 2)) continue;
+          if (${minX} && (r.x + r.width / 2) < ${minX}) continue;
+          out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+        }
+        return JSON.stringify(out);
+      })()`));
+      for (const rect of rects) {
+        trustedClick(rect.x, rect.y);
+        await sleep(1300);
+
+        if (profile.menuText) {
+          const menuRect = await evalJs(`(function () {
+            var re = new RegExp(${JSON.stringify(profile.menuText)});
+            var els = document.querySelectorAll('li, div[role="menuitem"], div, span, p, a');
+            for (var i = 0; i < els.length; i++) {
+              var t = (els[i].textContent || '').trim();
+              if (t.length > 0 && t.length <= 14 && re.test(t) && !/图片|拍照|截图/.test(t)) {
+                var r = els[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+              }
+            }
+            return null;
+          })()`);
+          if (!menuRect) continue; // 该候选没弹菜单 → 下一个
+          const m = JSON.parse(menuRect);
+          trustedClick(m.x, m.y);
+          await sleep(1500);
+        }
+
+        // 文件框：DOM 查询直塞
+        if (await pickInputAndUpload()) return { ok: true };
+        // chooser 事件路径：backendNodeId 直塞
+        if (chooserEvents.length) {
+          const evp = chooserEvents[chooserEvents.length - 1];
+          if (evp.backendNodeId) {
+            await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], backendNodeId: evp.backendNodeId });
+            await sleep(2500);
+            if (await evalJs(chipProbe)) return { ok: true };
+          }
+        }
+      }
+    }
+    return { ok: false, error: '入口未响应' };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  } finally {
+    if (attached) {
+      try { dbg.off('message', onMessage); } catch {}
+      try { dbg.detach(); } catch {}
+    }
+  }
+});
+
 async function createWindow() {
   // 直接使用工作区（不含任务栏的区域）作为窗口边界，避免底部被任务栏遮挡
   const area = screen.getPrimaryDisplay().workArea;

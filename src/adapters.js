@@ -19,6 +19,7 @@ const ADAPTERS = [
     name: '千问',
     // tongyi.com 已改版重定向到 qianwen.com（2026-08-24 CDP 实测）
     url: 'https://www.tongyi.com/',
+    attach: { entry: ['[aria-label*="附件"]'], menuText: '上传文档', input: 'afterEntry' }, // 附件：+号→菜单「上传文档」
     inputSelectors: [
       '[data-slate-editor]',
       'textarea[placeholder*="输入"]',
@@ -43,6 +44,7 @@ const ADAPTERS = [
     id: 'doubao',
     name: '豆包',
     url: 'https://www.doubao.com/chat/',
+    attach: { input: 'resident' }, // 附件：常驻文件框直塞（2026-09 E2E 实测）
     // 2026-08 改版：输入框 data-testid 移除（改 .semi-input-textarea），
     // 发送按钮类名不含 send（svg 带 send-msg-btn）；回复容器仍是 md-box-root
     inputSelectors: [
@@ -70,6 +72,7 @@ const ADAPTERS = [
     id: 'yuanbao',
     name: '元宝',
     url: 'https://yuanbao.tencent.com/chat',
+    attach: { entry: ['svg[class*="extra"]'], menuText: '本地文件', input: 'afterEntry' }, // 附件：左下角+号→菜单「本地文件」
     inputSelectors: [
       '.ql-editor[contenteditable="true"]',
       '[contenteditable="true"]',
@@ -94,6 +97,7 @@ const ADAPTERS = [
     id: 'zhipu',
     name: '智谱',
     url: 'https://chatglm.cn/main/alltoolsdetail?lang=zh',
+    attach: { input: 'resident' }, // 附件：3 个文件框，取无 accept 的那个直塞（chip 实测）
     // watchStop：深度思考阶段文本可能停顿，靠"停止生成"按钮可见性保持等待，
     // 避免把思考前奏当完整答案（2026-08 曾误判）
     watchStop: true,
@@ -127,6 +131,7 @@ const ADAPTERS = [
     id: 'kimi',
     name: 'Kimi',
     url: 'https://www.kimi.com/',
+    attach: { entry: ['.toolkit-trigger-btn'], input: 'afterEntry' }, // 附件：工具箱按钮唤出文件框（可信点击）
     // watchStop + staleMax 放宽：Kimi 常自动进联网研究，数分钟内页面无新回复文本，
     // 默认 8 轮陈旧检测会误杀（2026-08 曾把已答完的研究判成失败）
     watchStop: true,
@@ -157,6 +162,7 @@ const ADAPTERS = [
     id: 'deepseek',
     name: 'DeepSeek',
     url: 'https://chat.deepseek.com/',
+    attach: { input: 'resident' }, // 附件：常驻隐藏文件框直塞（快速模式；深思考发送环节未验证）
     // 2026-08-17 实测：输入框无 id（#chat-input 失效），class 含稳定的 ds-scroll-area，
     // placeholder 为「给 DeepSeek 发送消息」；页面常驻隐藏 input[type=file]（accept 含 docx/md），
     // 附件可经 CDP DOM.setFileInputFiles 直塞，无需点击
@@ -186,6 +192,7 @@ const ADAPTERS = [
     id: 'minimax',
     name: 'MiniMax',
     url: 'https://agent.minimaxi.com/',
+    attach: { input: 'resident' }, // 附件：2 个无类型文件框直塞（chip 实测）
     // watchStop：联网搜索阶段回复区长期停留在"我先搜一下"前奏文本，
     // 靠停止按钮可见性保持等待，避免前奏被当答案（2026-08 曾误判）
     watchStop: true,
@@ -216,6 +223,7 @@ const ADAPTERS = [
     id: 'wenxin',
     name: '文心',
     url: 'https://wenxin.baidu.com/',
+    attach: { entry: ['[class*="ci-"] svg'], entryMinX: 600, menuText: '上传本地文件', input: 'chooser' }, // 附件：回形针→菜单，chooser backendNodeId 直塞
     // staleMax 放宽：文心回复明显偏慢，连续两轮被默认 8 轮（约 24s）陈旧检测
     // 误判"未取到本轮回复"，实际稍后即交卷（2026-08 实测）
     staleMax: 20,
@@ -240,6 +248,7 @@ const ADAPTERS = [
     id: 'mimo',
     name: 'MiMo',
     url: 'https://aistudio.xiaomimimo.com/#/c',
+    attach: { input: 'resident' }, // 附件：常驻文件框直塞
     // 小米 MiMo（Xiaomi MiMo Studio）。2026-08-23 登录后实测校准：
     // - 需小米账号登录才能聊天，未登录点发送会跳 account.xiaomi.com 登录页（登录态在
     //   persist:mimo 分区长期保存）；

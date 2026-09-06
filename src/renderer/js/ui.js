@@ -64,6 +64,53 @@ function applyCloseMode() {
   roundtable.setCloseMode(getCloseMode());
 }
 
+// ================= 输入框附件（随问题分发给各家） =================
+// 单文件 v1：选定的磁盘路径在发送时经主进程按各家 attach 配置上传，
+// 失败自动降级纯文本。仅桌面 GUI 发送携带；「＋」复位时清除
+let currentAttachment = null;
+
+function getActiveAttachment() {
+  return currentAttachment;
+}
+
+function clearAttachmentChips() {
+  currentAttachment = null;
+  renderAttachChips();
+}
+
+function renderAttachChips() {
+  const box = document.getElementById('attach-chips');
+  if (!box) return;
+  if (!currentAttachment) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+  box.replaceChildren();
+  const chip = document.createElement('span');
+  chip.className = 'attach-chip';
+  chip.textContent = currentAttachment.name;
+  const x = document.createElement('button');
+  x.className = 'attach-chip-x';
+  x.textContent = '×';
+  x.title = '移除附件';
+  x.addEventListener('click', () => {
+    currentAttachment = null;
+    renderAttachChips();
+  });
+  chip.appendChild(x);
+  box.appendChild(chip);
+}
+
+document.getElementById('attach-btn').addEventListener('click', async () => {
+  const r = await roundtable.chooseAttachment().catch(() => null);
+  if (!r || r.canceled || !r.path) return;
+  currentAttachment = { path: r.path, name: r.name };
+  renderAttachChips();
+  promptEl.focus();
+});
+
 function getSettings() {
   return {
     // 总结方式：web=DeepSeek 第二账号网页总结（默认），api=OpenAI 兼容接口

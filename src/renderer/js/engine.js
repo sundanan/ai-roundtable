@@ -31,6 +31,7 @@ function syncSendStopButton(stopping) {
 }
 
 let currentQuestion = ''; // 本轮问题原文，抓取时用于排除"把问题当答案"
+let attachThisRound = false; // 本轮是否携带输入框附件（仅桌面 GUI 发送为 true）
 let activeRoundIds = null; // 本轮参与面板 id 集合；null=全部（改进2 可选子集）
 let desktopRoundSaved = false; // 改进1：桌面端本轮是否已落库（防重复总结时重复落库）
 let roundSettleHandled = false; // 本轮"全部到终态"收尾是否已做（完成通知/自动总结只触发一次）
@@ -68,6 +69,20 @@ async function runSendTask(p, text) {
     const pre = await execInPanel(p.webview, buildScrapeScript(p.adapter, ''));
     if (pre && pre.ok && !pre.pending) p.baselineText = cleanReply(pre.text);
   } catch {}
+  // 附件（随问题分发）：按各家 attach 配置上传，chip 校验失败自动降级纯文本
+  p.attachNote = '';
+  const att = typeof getActiveAttachment === 'function' ? getActiveAttachment() : null;
+  if (att && attachThisRound && p.adapter.attach) {
+    setStatus(p.statusEl, '上传附件…');
+    const attRes = await roundtable
+      .attachFile(p.webview.getWebContentsId(), att.path, att.name, p.adapter.attach)
+      .catch(() => null);
+    if (attRes && attRes.ok) {
+      p.attachNote = '📎';
+    } else {
+      setStatus(p.statusEl, '附件不可用，纯文本发送');
+    }
+  }
   try {
     let res = await sendToPanel(p.adapter, p.webview, text);
     // 改进4：发送失败自动重试一次（间隔 1.5s），治偶发的注入/发送失败
@@ -198,6 +213,7 @@ async function resendPanel(id) {
   if (!activeRoundIds) activeRoundIds = new Set([...panels.keys()]);
   activeRoundIds.add(id); // 之前未参与的家补发后也纳入本轮
   roundSettleHandled = false; // 补发后重新允许"全部到终态"收尾（通知/自动总结）
+  attachThisRound = true;
   p.row.style.display = '';
   p.reply = '';
   p.lastText = '';
@@ -235,6 +251,7 @@ function submit() {
     progressText.textContent = '未选择参与家，请在「设置」里勾选';
     return;
   }
+  attachThisRound = true; // 桌面发送携带输入框附件（若有）
   broadcast(text, selected);
 }
 
@@ -318,6 +335,7 @@ function resetToStandby() {
     p.rowBodyEl.className = 'row-body placeholder';
     p.rowBodyEl.textContent = '尚未发送';
   }
+  clearAttachmentChips();
   progressText.textContent = '尚未开始';
   progressFill.style.width = '0%';
   progressFill.className = '';
@@ -600,6 +618,7 @@ roundtable.onServiceAsk(async ({ requestId, question, sites }) => {
   }
   serviceBusy = true;
   activeServiceRequestId = requestId;
+  attachThisRound = false; // HTTP/agent 轮次不携带桌面输入框附件
   try {
     broadcast(question, sites); // 内部会设置 currentQuestion 并启动轮询（sites 为可选子集）
     await waitForRoundComplete();
