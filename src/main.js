@@ -615,9 +615,10 @@ ipcMain.handle('choose-attachment', async () => {
 //   Page.fileChooserOpened 用 backendNodeId 直塞
 // 上传后校验页面出现文件名词干（chip），失败返回 {ok:false} 由调用方降级纯文本
 ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, profile) => {
+  console.log(`[attach] 开始上传附件: wc=${webContentsId} file=${fileName}`);
   const wc = webContents.fromId(webContentsId);
   if (!wc) return { ok: false, error: 'webview 未就绪' };
-  if (!profile || !profile.input) return { ok: false, error: 'unsupported' };
+  if (!profile || !profile.input) { console.log('[attach] 该家无 attach 配置'); return { ok: false, error: 'unsupported' }; }
   const dbg = wc.debugger;
   let attached = false;
   const chooserEvents = [];
@@ -638,7 +639,9 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
     };
     const sleep = (ms) => new Promise((r2) => setTimeout(r2, ms));
     const trustedClick = (x, y) => {
-      wc.sendInputEvent({ type: 'mouseMoved', x, y });
+      // 注意：Electron sendInputEvent 的事件名是 mouseMove（CDP 里才叫 mouseMoved），
+      // 用错会抛 "Invalid event object"（2026-09-06 实测：曾致元宝/文心/Kimi/千问附件全挂）
+      wc.sendInputEvent({ type: 'mouseMove', x, y });
       wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
       wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
     };
@@ -682,7 +685,9 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
       await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: nodes.nodeIds[pick] });
       await sleep(2500);
-      return { ok: !!(await evalJs(chipProbe)) };
+      const ok = !!(await evalJs(chipProbe));
+      console.log(`[attach] resident 上传结果: ${ok}`);
+      return { ok };
     }
 
     // entry 流：逐个候选可信点击 → 菜单 → 文件框/chooser
@@ -701,22 +706,30 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
         return JSON.stringify(out);
       })()`));
       for (const rect of rects) {
+        // 每个候选点两次尝试：首次点击无菜单可能是页面刚加载完 handler 未挂好
+        for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) await sleep(2000);
         trustedClick(rect.x, rect.y);
         await sleep(1300);
 
         if (profile.menuText) {
-          const menuRect = await evalJs(`(function () {
-            var re = new RegExp(${JSON.stringify(profile.menuText)});
-            var els = document.querySelectorAll('li, div[role="menuitem"], div, span, p, a');
-            for (var i = 0; i < els.length; i++) {
-              var t = (els[i].textContent || '').trim();
-              if (t.length > 0 && t.length <= 14 && re.test(t) && !/图片|拍照|截图/.test(t)) {
-                var r = els[i].getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+          // 菜单弹出有动画延迟：最多扫 3 次（间隔 0.9s），避免误判"没弹菜单"
+          let menuRect = null;
+          for (let t = 0; t < 3 && !menuRect; t++) {
+            if (t > 0) await sleep(900);
+            menuRect = await evalJs(`(function () {
+              var re = new RegExp(${JSON.stringify(profile.menuText)});
+              var els = document.querySelectorAll('li, div[role="menuitem"], div, span, p, a');
+              for (var i = 0; i < els.length; i++) {
+                var t = (els[i].textContent || '').trim();
+                if (t.length > 0 && t.length <= 14 && re.test(t) && !/图片|拍照|截图/.test(t)) {
+                  var r = els[i].getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+                }
               }
-            }
-            return null;
-          })()`);
+              return null;
+            })()`);
+          }
           if (!menuRect) continue; // 该候选没弹菜单 → 下一个
           const m = JSON.parse(menuRect);
           trustedClick(m.x, m.y);
@@ -724,16 +737,17 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
         }
 
         // 文件框：DOM 查询直塞
-        if (await pickInputAndUpload()) return { ok: true };
+        if (await pickInputAndUpload()) { console.log('[attach] entry 上传结果: ok'); return { ok: true }; }
         // chooser 事件路径：backendNodeId 直塞
         if (chooserEvents.length) {
           const evp = chooserEvents[chooserEvents.length - 1];
           if (evp.backendNodeId) {
             await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], backendNodeId: evp.backendNodeId });
             await sleep(2500);
-            if (await evalJs(chipProbe)) return { ok: true };
+            if (await evalJs(chipProbe)) { console.log('[attach] entry(chooser) 上传结果: ok'); return { ok: true }; }
           }
         }
+        } // attempt 循环
       }
     }
     return { ok: false, error: '入口未响应' };
@@ -746,6 +760,7 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
     }
   }
 });
+
 
 async function createWindow() {
   // 直接使用工作区（不含任务栏的区域）作为窗口边界，避免底部被任务栏遮挡

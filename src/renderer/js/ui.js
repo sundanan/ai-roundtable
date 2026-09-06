@@ -80,6 +80,8 @@ function clearAttachmentChips() {
 
 function renderAttachChips() {
   const box = document.getElementById('attach-chips');
+  // 输入框底部留出 chip 空间（chip 悬浮于输入框内靠下位置）
+  promptEl.classList.toggle('has-attach', !!currentAttachment);
   if (!box) return;
   if (!currentAttachment) {
     box.hidden = true;

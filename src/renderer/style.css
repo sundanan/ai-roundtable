@@ -125,29 +125,52 @@ body {
   line-height: 1;
   color: var(--text-dim);
 }
-#new-btn:hover { color: var(--accent); background: var(--accent-faint); }
-#new-btn:focus { outline: none; }
-
-/* 输入框附件：📎 按钮 + 已选附件 chip 行 */
-#attach-btn {
-  align-self: center;
+/* 输入框附件：左侧 ＋/📎 上下均分 + 附件 chip 悬浮于输入框内底部 */
+.composer { position: relative; }
+.composer-side {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  margin: 0 -6px; /* 抵消 composer 间隙，让按钮贴近窗口左缘 */
+}
+#new-btn,
+#attach-btn {
+  flex: 1 1 50%; /* 高度均分输入框高度 */
+  width: 100%;
+  margin: 0;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 1;
   color: var(--text-dim);
 }
-#attach-btn:hover { color: var(--accent); background: var(--accent-faint); }
+#new-btn {
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+#attach-btn {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 14px;
+}
+#new-btn:hover, #attach-btn:hover { color: var(--accent); background: var(--accent-faint); }
+#new-btn:focus, #attach-btn:focus { outline: none; }
+/* 有附件时输入框底部留出 chip 空间，避免文字被压住 */
+#prompt.has-attach { padding-bottom: 36px; }
 #attach-chips {
+  position: absolute;
+  left: 46px;   /* 侧栏右缘起，落在输入框内部 */
+  bottom: 7px;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 14px 6px 44px;
 }
 #attach-chips[hidden] { display: none; }
 .attach-chip {
@@ -163,6 +186,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--bg-panel);
+  box-shadow: var(--shadow-card);
 }
 .attach-chip-x {
   border: none;
