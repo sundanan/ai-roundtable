@@ -79,6 +79,8 @@ async function runSendTask(p, text) {
       .catch(() => null);
     if (attRes && attRes.ok) {
       p.attachNote = '📎';
+      // 附件上传后发送键普遍有短暂禁用窗口（MiMo 实测"发送未生效"），等它就绪
+      await sleep(3000);
     } else {
       setStatus(p.statusEl, '附件不可用，纯文本发送');
     }

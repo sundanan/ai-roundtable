@@ -605,7 +605,25 @@ ipcMain.handle('choose-attachment', async () => {
     properties: ['openFile'],
   });
   if (canceled || !filePaths.length) return { canceled: true };
-  return { canceled: false, path: filePaths[0], name: path.basename(filePaths[0]) };
+  const p = filePaths[0];
+  const name = path.basename(p);
+  // 拒绝编辑器锁文件：WPS 的 .~xxx.docx / Office 的 ~$xxx.docx 不含正文，
+  // 曾致用户选错（2026-09-06 实测 162 字节锁文件分发给了 9 家）
+  if (/^\.~|^~\$/.test(name)) {
+    const real = p.replace(/[\\/]\.~([^/\\]+)$/, '/$1').replace(/[\\/]~\$(.+)$/, '/$1');
+    const hint = fs.existsSync(real)
+      ? `同目录发现正式文档「${path.basename(real)}」，请重新选择它`
+      : '同目录未找到正式文档（可能已被移动/删除）';
+    return { canceled: true, error: `「${name}」是 WPS/Office 的编辑器临时锁文件（不含正文）。${hint}` };
+  }
+  // 拒绝可疑的迷你文档：正常 docx/ppt/pdf 是压缩包，至少几 KB
+  try {
+    const stat = fs.statSync(p);
+    if (stat.size < 2048 && /\.(docx?|pptx?|pdf)$/i.test(name)) {
+      return { canceled: true, error: `「${name}」只有 ${stat.size} 字节，不像有效文档（正常文档至少几 KB），请确认选择的是正式文件` };
+    }
+  } catch {}
+  return { canceled: false, path: p, name };
 });
 
 // 逐家上传附件（2026-09-06 全量探索标定的各家路径，配置见 adapters.js attach 字段）：
