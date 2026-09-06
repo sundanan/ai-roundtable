@@ -64,8 +64,10 @@ function createTray() {
   });
 }
 
-// dock 里的 webview 被内容层遮挡，需关掉后台节流，否则部分站点（豆包/MiniMax）流式渲染停摆
-app.commandLine.appendSwitch('disable-background-timer-throttling');
+// dock 里的 webview 被内容层遮挡、隐藏到托盘时整窗后台化，曾致部分站点（豆包/MiniMax）
+// 流式渲染停摆。v1.4.1 起改为动态控制：保留进程级与原生遮挡保护（这两项不致停摆），
+// 仅移除全局的定时器节流禁用——参与轮次的面板经 setBackgroundThrottling(false) 精确豁免
+// （engine.applyPanelThrottling），空闲面板恢复节流，降低 CPU 与内存占用
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 // GPU 禁用与 X11 ozone 仅 Linux：本机（统信 UOS arm64）实测 GPU 进程反复崩溃
@@ -88,6 +90,11 @@ const ROUNDTABLE_PORT = Number(process.env.ROUNDTABLE_PORT || 8765); // 仅监�
 let mainWindow = null;
 // requestId -> { source:'http', httpRes?, question, watchdog? }，结果回来时按来源路由
 const pendingRounds = new Map();
+// HTTP 排队（改进2）：单轮串行下并发 /ask 不再直接 429，最多排 3 个 FIFO 等待
+const askQueue = [];
+const ASK_QUEUE_MAX = 3;
+// 关窗保护（改进1）：有进行中的轮次/总结时，退出前需用户确认
+let roundActive = false;
 
 // 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 20 分钟
 // （轮次等待 900s + 网页总结 300s + 发送/抓取余量）。超过 25 分钟仍无回报，
@@ -274,8 +281,22 @@ const httpServer = http.createServer(async (req, res) => {
         }
       } catch {}
       if (!question) return jsonResponse(res, 400, { ok: false, error: 'missing-question' });
-      if (pendingRounds.size > 0) {
-        return jsonResponse(res, 429, { ok: false, error: 'busy', message: '正在处理另一轮，请稍候' });
+      if (pendingRounds.size > 0 || askQueue.length > 0) {
+        // 改进2：不再直接 429——最多排 3 个 FIFO，当前轮结束后自动开始
+        if (askQueue.length >= ASK_QUEUE_MAX) {
+          return jsonResponse(res, 429, { ok: false, error: 'busy', message: '正在处理另一轮，且排队已满（最多 3 个），请稍候再试' });
+        }
+        const requestId = 'queue-' + Date.now();
+        askQueue.push({ requestId, question, sites, httpRes: async ? null : res, source: async ? 'http-async' : 'http' });
+        console.log(`[http] 排队受理（第 ${askQueue.length} 位）: ${question}`);
+        return jsonResponse(res, 202, {
+          ok: true,
+          queued: true,
+          requestId,
+          position: askQueue.length,
+          poll: `/ask/status?id=${requestId}`,
+          message: `已排队（第 ${askQueue.length} 位），当前轮结束后自动开始`,
+        });
       }
       const requestId = (async ? 'async-' : 'http-') + Date.now();
       pendingRounds.set(requestId, { source: async ? 'http-async' : 'http', httpRes: async ? null : res, question, sites });
@@ -297,6 +318,7 @@ const httpServer = http.createServer(async (req, res) => {
       const u = new URL('http://x' + req.url);
       const id = u.searchParams.get('id') || '';
       if (pendingRounds.has(id)) return jsonResponse(res, 200, { ok: true, state: 'running' });
+      if (askQueue.some((q) => q.requestId === id)) return jsonResponse(res, 200, { ok: true, state: 'queued' });
       const found = history.query('', 10000).find((e) => e.id === id);
       if (found) return jsonResponse(res, 200, { ok: true, state: 'done', item: found });
       return jsonResponse(res, 404, { ok: false, state: 'not-found', error: 'not-found' });
@@ -331,6 +353,22 @@ const httpServer = http.createServer(async (req, res) => {
     } catch {}
   }
 });
+
+// 排队调度（改进2）：当前轮结束后取队首开跑；一次只启动一轮
+function processAskQueue() {
+  while (askQueue.length) {
+    const item = askQueue.shift();
+    pendingRounds.set(item.requestId, { source: item.source, httpRes: item.httpRes, question: item.question, sites: item.sites });
+    if (!startRound(item.requestId, item.question, item.sites)) {
+      try { jsonResponse(item.httpRes, 503, { ok: false, error: 'not-ready', message: '服务窗口尚未就绪' }); } catch {}
+      pendingRounds.delete(item.requestId);
+      continue;
+    }
+    armRoundWatchdog(item.requestId);
+    console.log(`[http] 排队轮次开始: ${item.question}${item.sites ? '（子集:' + item.sites.join(',') + '）' : ''}`);
+    break;
+  }
+}
 
 // renderer 回报最终结果 → HTTP 渠道回写 JSON（带 summaryFile 附件路径）
 ipcMain.on('service:result', async (_event, data) => {
@@ -386,8 +424,11 @@ ipcMain.on('service:result', async (_event, data) => {
     } catch (e) {
       console.error('[http] 回写失败:', e && e.message);
     }
+    processAskQueue(); // 同步轮次收尾同样要调度排队
     return;
   }
+  // 本轮收尾（正常/失败/busy 均算）：调度下一个排队轮次
+  processAskQueue();
 });
 
 // renderer 上报进度（Phase 2 仅记录；Phase 3 用于增量更新卡片）。
@@ -539,6 +580,21 @@ ipcMain.on('set-close-mode', (_event, mode) => {
   console.log(`[close] 关窗行为已切换为: ${closeMode === 'exit' ? '退出程序' : '最小化到托盘'}`);
 });
 
+// 关窗保护（改进1）：渲染层在本轮有面板发送/生成或总结进行中时上报 true，
+// 退出模式下关窗先弹确认，防止误关丢整轮
+ipcMain.on('set-round-active', (_event, active) => {
+  roundActive = !!active;
+});
+
+// 动态节流（改进A）：参与轮次的面板关闭节流（隐藏窗口下流式渲染不停摆），
+// 空闲面板恢复节流（Chromium 可回收后台页面资源）
+ipcMain.handle('set-throttling', (_event, webContentsId, allowed) => {
+  const wc = webContents.fromId(webContentsId);
+  if (!wc) return false;
+  wc.setBackgroundThrottling(!!allowed);
+  return true;
+});
+
 async function createWindow() {
   // 直接使用工作区（不含任务栏的区域）作为窗口边界，避免底部被任务栏遮挡
   const area = screen.getPrimaryDisplay().workArea;
@@ -569,6 +625,21 @@ async function createWindow() {
   // tray 模式下隐藏到托盘常驻（仅 isQuitting 时才真正销毁）
   win.on('close', (e) => {
     if (closeMode === 'exit') {
+      // 关窗保护：本轮有面板在发送/生成或总结进行中，先确认再退
+      if (roundActive) {
+        const choice = dialog.showMessageBoxSync(win, {
+          type: 'warning',
+          message: '本轮圆桌或总结仍在进行中，现在退出将丢弃未完成的结果。',
+          detail: '只有本轮结束后结果才会自动存入历史记录。',
+          buttons: ['取消', '仍然退出'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (choice !== 1) {
+          e.preventDefault();
+          return;
+        }
+      }
       isQuitting = true;
       app.quit();
       return;

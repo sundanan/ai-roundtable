@@ -40,6 +40,18 @@ const ERR_LABELS = { risk: '🛡 需人工验证', timeout: '⏱ 超时可重试
 
 // 单家发送任务：重置会话 → 抓基线 → 发送（失败重试一次 → 标记的家刷新重发）→ 更新状态。
 // 广播与单家补发共用。
+// 动态节流（改进A）：sending/generating 的面板关闭节流（隐藏窗口下流式渲染不停摆），
+// 终态恢复节流（空闲页面省 CPU、允许 Chromium 回收后台资源）。仅在状态跨越时发 IPC
+let roundActiveSynced = false;
+
+function applyPanelThrottling(p) {
+  const shouldThrottle = p.state !== 'sending' && p.state !== 'generating';
+  if (p.throttling === shouldThrottle) return;
+  p.throttling = shouldThrottle;
+  try {
+    roundtable.setThrottling(p.webview.getWebContentsId(), shouldThrottle);
+  } catch {}
+}
 async function runSendTask(p, text) {
   p.lastActivityAt = Date.now(); // 活动看门狗起点：广播与 ↻ 单家补发共用此路径
   // 每轮开新会话：先回站点入口页再提问，避免上一轮问答留在模型上下文里
@@ -494,6 +506,14 @@ function updateProgress() {
 
   // 发送/停止一体按钮：有家在发送/生成中→红色「⏹ 停止」，全到终态→复原「发送」
   syncSendStopButton(counts.sending > 0 || counts.generating > 0);
+
+  // 动态节流 + 关窗保护：按最新状态逐面板切换节流；有进行中轮次/总结时告知主进程
+  for (const p of panels.values()) applyPanelThrottling(p);
+  const active = counts.sending > 0 || counts.generating > 0 || summarizeBusy || serviceBusy;
+  if (active !== roundActiveSynced) {
+    roundActiveSynced = active;
+    roundtable.setRoundActive(active);
+  }
 
   // 服务编排：若正有 HTTP/agent 触发的轮次在跑，顺带上报进度
   if (activeServiceRequestId) {

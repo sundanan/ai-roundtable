@@ -470,6 +470,10 @@ async function waitSendReady(webview) {
 async function summarizeViaWeb(usable, skipped) {
   const sp = summarizerPanel;
   const sumAd = getSummarizerAdapter(); // 总结模型可在设置中切换（默认 DeepSeek）
+  // 总结期间关闭总结者面板节流（窗口可能已隐藏到托盘，防流式生成停摆）
+  try {
+    roundtable.setThrottling(sp.webview.getWebContentsId(), false);
+  } catch {}
   // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（HTTP 服务轮次）不打扰
   if (!document.hidden) focusPanel('summarizer');
 
@@ -510,6 +514,7 @@ async function summarizeViaWeb(usable, skipped) {
     res = await sendToPanel(sumAd, sp.webview, sendText);
   }
   if (!res || !res.ok) {
+    try { roundtable.setThrottling(sp.webview.getWebContentsId(), true); } catch {}
     setStatus(sp.statusEl, '发送失败');
     throw new Error(
       `${summarizerBaseName()} 总结发送失败：${(res && res.error) || '未知'}。若尚未登录，请在全屏页面手动登录总结专用账号后再点「总结」`
@@ -553,11 +558,13 @@ async function summarizeViaWeb(usable, skipped) {
     const need = lastText.length < 10 ? 8 : 3;
     if (stable >= need) {
       setStatus(sp.statusEl, '总结已生成');
+      try { roundtable.setThrottling(sp.webview.getWebContentsId(), true); } catch {}
       unfocusPanel(); // 收起全屏面板，让总结面板的结构化结果直接可见（失败时保持展开便于排查）
       return lastText;
     }
   }
   setStatus(sp.statusEl, '等待超时');
+  try { roundtable.setThrottling(sp.webview.getWebContentsId(), true); } catch {}
   throw new Error(`${summarizerBaseName()} 网页总结等待超时（300 秒），请再点「总结」重试，或在设置中改用 API 总结`);
 }
 

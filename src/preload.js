@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('roundtable', {
 
   // ===== 关窗行为（退出程序 / 最小化到托盘常驻）=====
   setCloseMode: (mode) => ipcRenderer.send('set-close-mode', mode),
+  // 关窗保护：本轮有进行中的轮次/总结时上报主进程
+  setRoundActive: (active) => ipcRenderer.send('set-round-active', active),
+  // 动态节流：参与轮次的面板关闭节流，空闲面板恢复
+  setThrottling: (webContentsId, allowed) =>
+    ipcRenderer.invoke('set-throttling', webContentsId, allowed),
 
   // ===== 总结导出（Markdown / PDF，PDF 由主进程 HTML->printToPDF）=====
   exportSummary: (opts) => ipcRenderer.invoke('export-summary', opts),

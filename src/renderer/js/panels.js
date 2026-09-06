@@ -95,7 +95,8 @@ for (const adapter of ADAPTERS) {
     </div>
   `;
   const webview = document.createElement('webview');
-  webview.setAttribute('src', adapter.url);
+  // 改进6：错峰加载——src 延迟按序分配（见下方 staggerWebviewStarts），避免冷启动
+  // 10 个页面同时拉起造成带宽/内存尖峰
   webview.setAttribute('partition', `persist:${adapter.id}`);
   webview.setAttribute('allowpopups', '');
   panelEl.appendChild(webview);
@@ -194,6 +195,19 @@ for (const adapter of ADAPTERS) {
   panels.set(adapter.id, entry);
 }
 
+// 改进6：错峰启动——按创建顺序每 1.2s 分配一个 src，webview 才真正开始加载
+{
+  let i = 0;
+  for (const p of panels.values()) {
+    const wv = p.webview;
+    const url = p.adapter.url;
+    setTimeout(() => {
+      try { wv.setAttribute('src', url); } catch {}
+    }, i * 1200);
+    i++;
+  }
+}
+
 // ================= 总结者面板（总结专用账号；仅驻留 dock，不参与广播） =================
 // 总结模型可在「设置」里选择（默认 DeepSeek）：每家独立分区 persist:<id>-sum，
 // 与同站参与回答的面板会话完全隔离（可登录两个账号）。点「总结」走网页总结时被
@@ -238,8 +252,8 @@ const summarizerPanel = (() => {
 })();
 
 // 按当前设置（重）建总结者 webview：切换总结模型时调用（旧 webview 直接移除，
-// 各家分区独立持久化，切回不丢登录态）
-function rebuildSummarizerPanel() {
+// 各家分区独立持久化，切回不丢登录态）；startDelayMs>0 时错峰加载（冷启动排队第 10 位）
+function rebuildSummarizerPanel(startDelayMs = 0) {
   const ad = getSummarizerAdapter();
   const siteId = getSummarizerSiteId();
   // 面板名用基础站点名（SUMMARIZER.name 已含「·总结」后缀，直接拼会重复）
@@ -254,10 +268,16 @@ function rebuildSummarizerPanel() {
     summarizerPanel.webview.remove();
   }
   const webview = document.createElement('webview');
-  webview.setAttribute('src', ad.url);
   webview.setAttribute('partition', `persist:${siteId}-sum`);
   webview.setAttribute('allowpopups', '');
   summarizerPanel.panelEl.appendChild(webview);
+  if (startDelayMs > 0) {
+    setTimeout(() => {
+      if (summarizerPanel.webview === webview) webview.setAttribute('src', ad.url);
+    }, startDelayMs);
+  } else {
+    webview.setAttribute('src', ad.url);
+  }
   const bind = (ev, fn) => {
     webview.addEventListener(ev, fn);
     return [ev, fn];
@@ -283,7 +303,7 @@ function rebuildSummarizerPanel() {
   titleEl.title = `点开「${baseAd.name}」总结账号页面（手动登录总结专用账号用）`;
 }
 
-rebuildSummarizerPanel();
+rebuildSummarizerPanel(9 * 1200); // 冷启动错峰：排在 9 家回答面板之后
 
 const DOT_LABELS = {
   '': '未加载',
