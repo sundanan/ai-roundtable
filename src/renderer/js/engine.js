@@ -59,9 +59,32 @@ async function runSendTask(p, text) {
   // （2026-08-18 实测 deepseek 面板连续三轮进同一会话，回答互相污染、
   // 交叉验证失真；总结者面板一直是同样做法）。适配器可设 resetBeforeSend:false 退出。
   if (p.adapter.resetBeforeSend !== false) {
-    try { p.webview.loadURL(p.adapter.url).catch(() => {}); } catch {}
-    await waitWebviewReady(p.webview);
-    await sleep(4000); // 等 SPA 初始化出输入框
+    // 开屏后从未用过的家（pageDirty=false）：页面已是干净新会话，跳过重载，
+    // 只等输入框就绪即发送——首发送快 8~12s（2026-09-07 用户要求"打开即用"）。
+    // 手动全屏看过（focusPanel 标脏）或本轮已用过的家：照旧重载保上下文干净。
+    let skipped = false;
+    if (p.pageDirty === false) {
+      const waitReady = `(function () {
+        function vis(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+        var sels = ${JSON.stringify(p.adapter.inputSelectors)};
+        for (var i = 0; i < sels.length; i++) {
+          try { var els = document.querySelectorAll(sels[i]); for (var j = 0; j < els.length; j++) if (vis(els[j])) return true; } catch (e) {}
+        }
+        return false;
+      })()`;
+      for (let w = 0; w < 30; w++) {
+        try { if (await execInPanel(p.webview, waitReady)) { skipped = true; break; } } catch {}
+        await sleep(700);
+      }
+    }
+    if (skipped) {
+      setStatus(p.statusEl, '页面就绪');
+    } else {
+      try { p.webview.loadURL(p.adapter.url).catch(() => {}); } catch {}
+      await waitWebviewReady(p.webview);
+      await sleep(4000); // 等 SPA 初始化出输入框
+    }
+    p.pageDirty = false;
   }
   // 发送前先抓当前"上一条回复"作基线：本轮若始终抓到同样的内容，说明是新回复没到，
   // 不能把上一轮遗留当成本轮答案（曾导致 4 家回陈旧内容）。
@@ -137,6 +160,7 @@ async function runSendTask(p, text) {
       }
     }
     if (res && res.ok) {
+      p.pageDirty = true;
       if (p.state === 'sending') {
         p.state = 'generating';
         p.genStart = Date.now();
@@ -147,6 +171,7 @@ async function runSendTask(p, text) {
       if (!roundAborted) setStatus(p.statusEl, '已发送'); // 停止后不改写「已停止」
     } else {
       p.state = 'error';
+      p.pageDirty = true;
       const msg = (res && res.error) || '注入失败';
       setStatus(p.statusEl, msg);
       const cat = await detectErrorCategory(p, msg);
@@ -159,6 +184,7 @@ async function runSendTask(p, text) {
     }
   } catch (e) {
     p.state = 'error';
+    p.pageDirty = true;
     const msg = String(e.message || e).slice(0, 60);
     setStatus(p.statusEl, `失败：${msg}`);
     const cat = await detectErrorCategory(p, msg);

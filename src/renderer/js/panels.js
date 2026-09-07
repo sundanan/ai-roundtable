@@ -41,6 +41,8 @@ function clearFocusedPanels() {
 function focusPanel(id) {
   const p = panels.get(id) || (id === 'summarizer' ? summarizerPanel : null);
   if (!p) return;
+  // 用户全屏看过该家 = 页面可能被手动操作过，下轮发送前照旧重载（新鲜页才可跳过）
+  if (p !== summarizerPanel) p.pageDirty = true;
   clearFocusedPanels();
   p.panelEl.classList.add('focused');
   dock.classList.add('active');
@@ -95,8 +97,8 @@ for (const adapter of ADAPTERS) {
     </div>
   `;
   const webview = document.createElement('webview');
-  // 改进6：错峰加载——src 延迟按序分配（见下方 staggerWebviewStarts），避免冷启动
-  // 10 个页面同时拉起造成带宽/内存尖峰
+  // 2026-09-07：撤销错峰加载——用户使用模式为"每天数次、打开即用"，错峰让最后
+  // 一家晚 10s 才开始加载，改为并行加载保证开屏即就绪
   webview.setAttribute('partition', `persist:${adapter.id}`);
   webview.setAttribute('allowpopups', '');
   panelEl.appendChild(webview);
@@ -170,6 +172,7 @@ for (const adapter of ADAPTERS) {
     stableCount: 0,
     reply: '',
     genStart: null, // 进入 generating 的时间戳（等待计时用）
+    pageDirty: false, // 开屏加载后未使用的干净页（发送时可跳过重载，见 engine.runSendTask）
   };
 
   panelEl.querySelector('.reload').addEventListener('click', () => webview.reload());
@@ -195,17 +198,9 @@ for (const adapter of ADAPTERS) {
   panels.set(adapter.id, entry);
 }
 
-// 改进6：错峰启动——按创建顺序每 1.2s 分配一个 src，webview 才真正开始加载
-{
-  let i = 0;
-  for (const p of panels.values()) {
-    const wv = p.webview;
-    const url = p.adapter.url;
-    setTimeout(() => {
-      try { wv.setAttribute('src', url); } catch {}
-    }, i * 1200);
-    i++;
-  }
+// 并行加载（撤销错峰，理由见上）：开屏即全部开始加载
+for (const p of panels.values()) {
+  try { p.webview.setAttribute('src', p.adapter.url); } catch {}
 }
 
 // ================= 总结者面板（总结专用账号；仅驻留 dock，不参与广播） =================
@@ -253,7 +248,7 @@ const summarizerPanel = (() => {
 
 // 按当前设置（重）建总结者 webview：切换总结模型时调用（旧 webview 直接移除，
 // 各家分区独立持久化，切回不丢登录态）；startDelayMs>0 时错峰加载（冷启动排队第 10 位）
-function rebuildSummarizerPanel(startDelayMs = 0) {
+function rebuildSummarizerPanel() {
   const ad = getSummarizerAdapter();
   const siteId = getSummarizerSiteId();
   // 面板名用基础站点名（SUMMARIZER.name 已含「·总结」后缀，直接拼会重复）
@@ -271,13 +266,7 @@ function rebuildSummarizerPanel(startDelayMs = 0) {
   webview.setAttribute('partition', `persist:${siteId}-sum`);
   webview.setAttribute('allowpopups', '');
   summarizerPanel.panelEl.appendChild(webview);
-  if (startDelayMs > 0) {
-    setTimeout(() => {
-      if (summarizerPanel.webview === webview) webview.setAttribute('src', ad.url);
-    }, startDelayMs);
-  } else {
-    webview.setAttribute('src', ad.url);
-  }
+  webview.setAttribute('src', ad.url);
   const bind = (ev, fn) => {
     webview.addEventListener(ev, fn);
     return [ev, fn];
@@ -303,7 +292,7 @@ function rebuildSummarizerPanel(startDelayMs = 0) {
   titleEl.title = `点开「${baseAd.name}」总结账号页面（手动登录总结专用账号用）`;
 }
 
-rebuildSummarizerPanel(9 * 1200); // 冷启动错峰：排在 9 家回答面板之后
+rebuildSummarizerPanel();
 
 const DOT_LABELS = {
   '': '未加载',
