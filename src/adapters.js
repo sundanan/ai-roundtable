@@ -264,7 +264,11 @@ const ADAPTERS = [
       'textarea[placeholder]',
       'textarea',
     ],
+    // 2026-09-07 站点更新：加号/工具键排在发送键之前（同容器结构）——
+    // sendPickLast 取最后一个启用的匹配（纸飞机发送键在最右），避免点到加号弹文件框
+    sendPickLast: true,
     sendSelectors: [
+      'div:has(> div > textarea) button[type="button"]',
       'div:has(> div > textarea) button:last-child',
       'button[class*="send" i]',
       'button[class*="submit" i]',

@@ -43,6 +43,13 @@ promptEl.addEventListener('keydown', (e) => {
 });
 
 function autoGrow() {
+  // 分隔条锁死（2026-09-07 用户反馈）：拖动过 h-divider 后高度锁定为固定值，
+  // 不再随内容自动增减（内容多行时 textarea 内部滚动）；未拖过才自适应
+  const saved = parseInt(localStorage.getItem('rt_prompt_h'), 10);
+  if (saved >= 54) {
+    promptEl.style.height = saved + 'px';
+    return;
+  }
   promptEl.style.height = 'auto';
   promptEl.style.height = Math.min(promptEl.scrollHeight, 180) + 'px';
 }
@@ -976,21 +983,30 @@ divider.addEventListener('mousedown', (e) => {
 });
 document.addEventListener('mousemove', (e) => {
   if (!dividerDragging) return;
+  if (e.buttons === 0) endDividerDrag(); // mouseup 被系统对话框吞掉时防拖拽卡死
   const rect = outputCols.getBoundingClientRect();
   let pct = ((e.clientX - rect.left) / rect.width) * 100;
   pct = Math.max(20, Math.min(78, pct));
   dividerPct = pct;
   rowsEl.style.flex = `0 0 ${pct}%`;
 });
-document.addEventListener('mouseup', () => {
-  if (dividerDragging) {
-    dividerDragging = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    if (dividerPct) {
-      try { localStorage.setItem('rt_divider_pct', String(dividerPct)); } catch {}
-    }
+function endDividerDrag() {
+  dividerDragging = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  if (dividerPct) {
+    try { localStorage.setItem('rt_divider_pct', String(dividerPct)); } catch {}
   }
+}
+document.addEventListener('mouseup', () => {
+  if (dividerDragging) endDividerDrag();
+});
+// 失焦（系统对话框/切窗）时终止拖拽，防止分隔条自己跟着鼠标走
+window.addEventListener('blur', () => {
+  dividerDragging = false;
+  hDividerDragging = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
 });
 
 // ================= 输入区/输出区 横向拖拽分隔条（调整输入框高度） =================
@@ -1018,12 +1034,12 @@ hDivider.addEventListener('mousedown', (e) => {
 });
 document.addEventListener('mousemove', (e) => {
   if (!hDividerDragging) return;
+  if (e.buttons === 0) endHDividerDrag(); // mouseup 被吞时防卡死
   const h = Math.max(54, Math.min(180, promptStartH + (e.clientY - hDragStartY)));
   promptEl.style.height = `${h}px`;
   hDividerMoved = true;
 });
-document.addEventListener('mouseup', () => {
-  if (!hDividerDragging) return;
+function endHDividerDrag() {
   hDividerDragging = false;
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
@@ -1032,4 +1048,7 @@ document.addEventListener('mouseup', () => {
   try {
     localStorage.setItem('rt_prompt_h', String(parseInt(promptEl.style.height, 10) || ''));
   } catch {}
+}
+document.addEventListener('mouseup', () => {
+  if (hDividerDragging) endHDividerDrag();
 });

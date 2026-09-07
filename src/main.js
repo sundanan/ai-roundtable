@@ -775,6 +775,8 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
     return { ok: false, error: String((e && e.message) || e) };
   } finally {
     if (attached) {
+      // 显式关闭拦截再 detach：防止残留拦截影响用户后续手动的文件选择
+      try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch {}
       try { dbg.off('message', onMessage); } catch {}
       try { dbg.detach(); } catch {}
     }
@@ -881,6 +883,8 @@ ipcMain.handle('click-at', (event, webContentsId, x, y) => {
   const wc = webContents.fromId(webContentsId);
   if (!wc) throw new Error('webview 尚未就绪');
   wc.focus();
+  // MiMo 等站点要求 hover 后点击才生效（2026-09-07 实测），统一先发 mouseMove
+  wc.sendInputEvent({ type: 'mouseMove', x, y });
   wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
   wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
 });

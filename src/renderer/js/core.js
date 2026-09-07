@@ -97,7 +97,7 @@ function buildFillScript(text) {
 
 // 第三步：轮询等待发送按钮激活并点击（输入后按钮常是异步激活）
 function buildClickSendScript(adapter) {
-  const cfg = JSON.stringify({ sendSelectors: adapter.sendSelectors });
+  const cfg = JSON.stringify({ sendSelectors: adapter.sendSelectors, sendPickLast: !!adapter.sendPickLast });
   return `(async function () {
     var cfg = ${cfg};
     function visible(el) {
@@ -126,10 +126,24 @@ function buildClickSendScript(adapter) {
       '[data-testid*="send" i]', '[aria-label*="发送" i]', '[aria-label*="Send" i]',
       'a[class*="send" i]', '[class*="send-btn" i]', '[class*="sendBtn" i]'
     ]);
+    function findAll(list) {
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        try {
+          var els = Array.prototype.slice.call(document.querySelectorAll(list[i]));
+          for (var j = 0; j < els.length; j++) if (visible(els[j])) out.push(els[j]);
+        } catch (e) {}
+      }
+      return out;
+    }
     var btn = null;
     for (var t = 0; t < 12; t++) {
-      btn = find(sendList);
-      if (enabled(btn)) { btn.click(); return { ok: true, via: 'button' }; }
+      var cands = findAll(sendList).filter(function (b) { return enabled(b); });
+      if (cands.length) {
+        btn = cfg.sendPickLast ? cands[cands.length - 1] : cands[0];
+        btn.click();
+        return { ok: true, via: 'button' };
+      }
       await new Promise(function (r) { setTimeout(r, 200); });
     }
     return { ok: false, error: 'no-button' };
@@ -138,7 +152,7 @@ function buildClickSendScript(adapter) {
 
 // 发送按钮定位（供可信鼠标点击）：返回按钮中心坐标
 function buildSendRectScript(adapter) {
-  const cfg = JSON.stringify({ sendSelectors: adapter.sendSelectors });
+  const cfg = JSON.stringify({ sendSelectors: adapter.sendSelectors, sendPickLast: !!adapter.sendPickLast });
   return `(function () {
     var cfg = ${cfg};
     function visible(el) {
@@ -167,8 +181,9 @@ function buildSendRectScript(adapter) {
       '[data-testid*="send" i]', '[aria-label*="发送" i]', '[aria-label*="Send" i]',
       'a[class*="send" i]', '[class*="send-btn" i]', '[class*="sendBtn" i]'
     ]);
-    var btn = find(sendList);
-    if (!enabled(btn)) return { ok: false };
+    var cands = findAll(sendList).filter(function (b) { return enabled(b); });
+    if (!cands.length) return { ok: false };
+    var btn = cfg.sendPickLast ? cands[cands.length - 1] : cands[0];
     var r = btn.getBoundingClientRect();
     return { ok: true, x: r.x + r.width / 2, y: r.y + r.height / 2 };
   })()`;
