@@ -79,8 +79,24 @@ async function runSendTask(p, text) {
       .catch(() => null);
     if (attRes && attRes.ok) {
       p.attachNote = '📎';
-      // 附件上传后发送键普遍有短暂禁用窗口（MiMo 实测"发送未生效"），等它就绪
-      await sleep(3000);
+      // 附件上传后发送键有禁用窗口（MiMo 曾"发送未生效"卡住）：轮询等按钮恢复可点，
+      // 最多 12s；探测失败不阻塞，交给 sendToPanel 的三段降级自行处理
+      setStatus(p.statusEl, '等待发送就绪…');
+      const probe = `(function () {
+        function vis(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+        var sels = ${JSON.stringify(p.adapter.sendSelectors || [])}.concat(['button[class*="send" i]', '[data-testid*="send" i]', '[aria-label*="发送" i]']);
+        for (var i = 0; i < sels.length; i++) {
+          try { var els = document.querySelectorAll(sels[i]); for (var j = 0; j < els.length; j++) if (vis(els[j])) {
+            var b = els[j];
+            return !b.disabled && b.getAttribute('aria-disabled') !== 'true' && getComputedStyle(b).cursor !== 'not-allowed';
+          } } catch (e) {}
+        }
+        return true; // 找不到发送键不阻塞
+      })()`;
+      for (let w = 0; w < 12; w++) {
+        try { if (await execInPanel(p.webview, probe)) break; } catch {}
+        await sleep(1000);
+      }
     } else {
       setStatus(p.statusEl, '附件不可用，纯文本发送');
     }

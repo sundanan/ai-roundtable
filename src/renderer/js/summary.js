@@ -474,8 +474,8 @@ async function summarizeViaWeb(usable, skipped) {
   try {
     roundtable.setThrottling(sp.webview.getWebContentsId(), false);
   } catch {}
-  // 全屏展开便于用户看进度/首次手动登录；窗口隐藏时（HTTP 服务轮次）不打扰
-  if (!document.hidden) focusPanel('summarizer');
+  // 不再自动全屏展开总结页：保持主界面不动（2026-09-07 用户反馈），抓取走 CDP
+  // 与页面可见性无关。需要查看/登录总结账号时，点总结面板标题「📋 总结」或「账号」按钮手动展开。
 
   setStatus(sp.statusEl, '正在打开新总结会话…');
   sp.webview.loadURL(sumAd.url).catch(() => {});
@@ -559,7 +559,6 @@ async function summarizeViaWeb(usable, skipped) {
     if (stable >= need) {
       setStatus(sp.statusEl, '总结已生成');
       try { roundtable.setThrottling(sp.webview.getWebContentsId(), true); } catch {}
-      unfocusPanel(); // 收起全屏面板，让总结面板的结构化结果直接可见（失败时保持展开便于排查）
       return lastText;
     }
   }
