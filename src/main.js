@@ -754,6 +754,8 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
           await sleep(1500);
         }
 
+        // chooser 拦截可能在页面导航/时间流逝后失效（实测会弹原生文件框），点击后重设一次
+        try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true }); } catch {}
         // 文件框：DOM 查询直塞
         if (await pickInputAndUpload()) { console.log('[attach] entry 上传结果: ok'); return { ok: true }; }
         // chooser 事件路径：backendNodeId 直塞

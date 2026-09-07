@@ -84,15 +84,28 @@ async function runSendTask(p, text) {
       setStatus(p.statusEl, '等待发送就绪…');
       const probe = `(function () {
         function vis(el) { if (!el) return false; var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
-        var sels = ${JSON.stringify(p.adapter.sendSelectors || [])}.concat(['button[class*="send" i]', '[data-testid*="send" i]', '[aria-label*="发送" i]']);
-        for (var i = 0; i < sels.length; i++) {
-          try { var els = document.querySelectorAll(sels[i]); for (var j = 0; j < els.length; j++) if (vis(els[j])) {
-            var b = els[j];
-            return !b.disabled && b.getAttribute('aria-disabled') !== 'true' && getComputedStyle(b).cursor !== 'not-allowed';
-          } } catch (e) {}
+        function ready(b) {
+          return !b.disabled && b.getAttribute('aria-disabled') !== 'true' && getComputedStyle(b).cursor !== 'not-allowed';
         }
-        return true; // 找不到发送键不阻塞
+        var sels = ${JSON.stringify(p.adapter.sendSelectors || [])};
+        // MiMo 等结构定位（按钮无 send 标识）限定在 textarea 容器内找，避免误配侧栏按钮
+        if (!sels.length) sels = ['div:has(> div > textarea) button:last-child'];
+        for (var i = 0; i < sels.length; i++) {
+          try {
+            var els = document.querySelectorAll(sels[i]);
+            for (var j = 0; j < els.length; j++) {
+              if (!vis(els[j])) continue;
+              // MiMo 的 button:last-child 可能命中多个容器：要求邻近 textarea（2 层内）
+              var near = els[j].closest('div') || els[j];
+              var box = near.parentElement && near.parentElement.parentElement ? near.parentElement.parentElement : near;
+              if (!box.querySelector('textarea')) continue;
+              return ready(els[j]);
+            }
+          } catch (e) {}
+        }
+        return true; // 专属选择器全未命中（页面改版等）不阻塞，交给 sendToPanel 报错
       })()`;
+      await sleep(2500); // 起步等待：附件解析上传普遍有 1~3s 禁用窗口
       for (let w = 0; w < 12; w++) {
         try { if (await execInPanel(p.webview, probe)) break; } catch {}
         await sleep(1000);
