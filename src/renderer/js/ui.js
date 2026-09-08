@@ -131,6 +131,32 @@ function getSettings() {
   };
 }
 
+// ================= 分辨率自适应缩放（V5：保持当前视觉效果） =================
+// 首次运行记录窗口宽度为设计基准；之后按 当前宽度/基准 计算缩放系数，用 CSS zoom
+// 整体等比缩放（字体/间距/布局同步放大缩小），换分辨率后视觉比例与基准一致。
+// 钳制 0.7~3.0 防极端值；resize 时防抖重算。
+(function applyResolutionScale() {
+  const KEY = 'rt_design_w';
+  try {
+    if (!localStorage.getItem(KEY)) {
+      const w = window.innerWidth;
+      if (w >= 600 && w <= 6000) localStorage.setItem(KEY, String(w));
+    }
+    let timer = null;
+    const apply = () => {
+      const base = parseFloat(localStorage.getItem(KEY));
+      if (!base || base < 600) return;
+      const scale = Math.max(0.7, Math.min(3, window.innerWidth / base));
+      document.documentElement.style.zoom = scale.toFixed(3);
+    };
+    apply();
+    window.addEventListener('resize', () => {
+      clearTimeout(timer);
+      timer = setTimeout(apply, 150);
+    });
+  } catch {}
+})();
+
 // ================= 界面主题（V4：深色默认 / 浅色 / 跟随系统） =================
 // 存储值：''（跟随系统，默认）| 'dark' | 'light'；实际生效值写到 <html data-theme>。
 // 深色是基础变量组（:root 原值），浅色由 [data-theme="light"] 覆盖。
