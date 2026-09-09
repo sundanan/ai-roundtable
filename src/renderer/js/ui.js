@@ -136,17 +136,16 @@ function getSettings() {
 // 整体等比缩放（字体/间距/布局同步放大缩小），换分辨率后视觉比例与基准一致。
 // 钳制 0.7~3.0 防极端值；resize 时防抖重算。
 (function applyResolutionScale() {
-  const KEY = 'rt_design_w';
+  // 设计基准 = 开发机 2160×1440@2x 的窗口宽度（1080 CSS px，2026-09-07 用户确认
+  // 该比例视觉效果良好）。所有机器统一以它为参照：换分辨率后按宽度比值缩放，
+  // 文字/logo 的屏幕空间占比与基准机一致。此前"每机首跑自捕获基准"是错的——
+  // 新机器会把自己当基准导致不缩放（1920@1x 实测）。
+  const DESIGN_W = 1080;
   try {
-    if (!localStorage.getItem(KEY)) {
-      const w = window.innerWidth;
-      if (w >= 600 && w <= 6000) localStorage.setItem(KEY, String(w));
-    }
+    localStorage.removeItem('rt_design_w'); // 清理旧机制残留
     let timer = null;
     const apply = () => {
-      const base = parseFloat(localStorage.getItem(KEY));
-      if (!base || base < 600) return;
-      const scale = Math.max(0.7, Math.min(3, window.innerWidth / base));
+      const scale = Math.max(0.7, Math.min(3, window.innerWidth / DESIGN_W));
       document.documentElement.style.zoom = scale.toFixed(3);
     };
     apply();
