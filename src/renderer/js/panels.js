@@ -69,6 +69,7 @@ const BRAND_COLORS = {
   minimax: '#f0564f',
   wenxin: '#2932e1',
   mimo: '#ff6900',
+  stepfun: '#1f2937',
 };
 
 // V3：徽章内嵌官方 logo（assets/logos/<id>.png，64px）；加载成功后隐藏首字母
@@ -316,7 +317,12 @@ function setDots(p, state) {
 function getSelectedIds() {
   try {
     const v = JSON.parse(localStorage.getItem('rt_selected') || 'null');
-    if (Array.isArray(v)) return v.filter((id) => panels.has(id));
+    if (Array.isArray(v)) {
+      const saved = new Set(v.filter((id) => panels.has(id)));
+      // 新增的家族（存储里没有的）默认参与，避免升级后新模型被静默排除
+      for (const id of panels.keys()) if (!v.includes(id)) saved.add(id);
+      return [...saved];
+    }
   } catch {}
   return [...panels.keys()];
 }

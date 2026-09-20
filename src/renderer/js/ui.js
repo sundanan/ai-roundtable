@@ -824,7 +824,7 @@ function buildWizard() {
       <div class="wizard-crumbs"></div>
       <div class="wizard-page" data-step="1">
         <h2>欢迎使用 AI 圆桌</h2>
-        <p class="wz-lead">一个问题，同时发给 9 家 AI 网页版，收齐后自动生成五段结构总结（主要共识 / 次要共识 / 分歧观点 / 个性观点 / 综合意见）。首次使用只需两步：</p>
+        <p class="wz-lead">一个问题，同时发给 10 家 AI 网页版，收齐后自动生成五段结构总结（主要共识 / 次要共识 / 分歧观点 / 个性观点 / 综合意见）。首次使用只需两步：</p>
         <ol class="wz-preview">
           <li><b>登录各家</b>——复用各家网页版账号，无需任何 API Key，登录态长期保存</li>
           <li><b>选择总结方式</b>——默认「网页总结」用一个第二账号免费生成，也可改 API</li>

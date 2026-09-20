@@ -278,6 +278,30 @@ const ADAPTERS = [
     ],
     pruneSelectors: ['[class*="Collapsible_" i]'],
   },
+  {
+    id: 'stepfun',
+    name: '阶跃',
+    // 阶跃星辰 AI Studio（第 10 家，2026-09-20 新增）。选择器为通用猜测值，
+    // 首次登录后经 selector-check/CDP 校准。
+    url: 'https://studio.stepfun.com/',
+    inputSelectors: [
+      'textarea[placeholder]',
+      '[contenteditable="true"]',
+      'textarea',
+    ],
+    sendSelectors: [
+      '[aria-label*="发送" i]',
+      '[data-testid*="send" i]',
+      'button[class*="send" i]',
+      '[class*="send-btn" i]',
+    ],
+    responseSelectors: [
+      '[class*="markdown"]',
+      '[class*="message-content"]',
+      '[class*="answer" i]',
+      '[class*="assistant" i]',
+    ],
+  },
 ];
 
 /**
