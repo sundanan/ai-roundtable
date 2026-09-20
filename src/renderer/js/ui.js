@@ -193,7 +193,7 @@ const SUM_MODEL_NOTES = {
   yuanbao: '无常驻文件框，附件直传未实测；失败自动回退文本模式',
   wenxin: '无常驻文件框，附件直传未实测；失败自动回退文本模式',
   minimax: '文件框未标注类型，附件直传未实测；失败自动回退文本模式',
-  stepfun: '实验性：文本模式总结（每家截断 2000 字）；需先登录阶跃账号，发送/抓取选择器待实测校准',
+  stepfun: '推荐：附件直传实测可用（docx），总结全链路实测通过；长上下文',
 };
 
 const cfgSumModel = document.getElementById('cfg-sum-model');

@@ -285,6 +285,9 @@ const ADAPTERS = [
     // 回复块类名为 Tailwind 无 markdown 字样——div.text-foreground.leading-relaxed；
     // 输入框 textarea、发送键 [aria-label*=发送] 实测命中。用户已登录）
     url: 'https://studio.stepfun.com/',
+    // 附件：常驻文件框直塞（2026-09-22 用户以阶跃为总结模型实测：docx 直塞上传+
+    // 五段总结生成+抓取全链路通过）
+    attach: { input: 'resident' },
     // 生成中有停止按钮，防"推理前奏停顿被当答案"（Step 会先输出英文分析前奏）
     watchStop: true,
     inputSelectors: [
