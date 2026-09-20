@@ -281,9 +281,12 @@ const ADAPTERS = [
   {
     id: 'stepfun',
     name: '阶跃',
-    // 阶跃星辰 AI Studio（第 10 家，2026-09-20 新增）。选择器为通用猜测值，
-    // 首次登录后经 selector-check/CDP 校准。
+    // 阶跃星辰 AI Studio（第 10 家，2026-09-20 新增；登录后 2026-09-22 CDP 校准：
+    // 回复块类名为 Tailwind 无 markdown 字样——div.text-foreground.leading-relaxed；
+    // 输入框 textarea、发送键 [aria-label*=发送] 实测命中。用户已登录）
     url: 'https://studio.stepfun.com/',
+    // 生成中有停止按钮，防"推理前奏停顿被当答案"（Step 会先输出英文分析前奏）
+    watchStop: true,
     inputSelectors: [
       'textarea[placeholder]',
       '[contenteditable="true"]',
@@ -296,6 +299,7 @@ const ADAPTERS = [
       '[class*="send-btn" i]',
     ],
     responseSelectors: [
+      'div[class*="text-foreground"][class*="leading-relaxed"]',
       '[class*="markdown"]',
       '[class*="message-content"]',
       '[class*="answer" i]',
