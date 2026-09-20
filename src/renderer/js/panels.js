@@ -21,7 +21,7 @@ const panels = new Map();
 // 顺序即下拉展示顺序：附件直传能力强的排前面。
 const SUM_MODEL_ALLOWED = [
   'deepseek', 'doubao', 'mimo', 'kimi',
-  'zhipu', 'qwen', 'yuanbao', 'wenxin', 'minimax',
+  'zhipu', 'qwen', 'yuanbao', 'wenxin', 'minimax', 'stepfun',
 ];
 
 const dock = document.getElementById('dock');
