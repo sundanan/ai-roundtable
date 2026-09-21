@@ -42,17 +42,28 @@ promptEl.addEventListener('keydown', (e) => {
   }
 });
 
+function promptHeightCap() {
+  // 输入框高度上限 = 视口高度 - 行区最小需求（10 行两行空间 ≈ 460px），
+  // 防止锁定的高输入框把 10 个模型行压到第二行显示不全（2026-09-21 实测）
+  return Math.max(54, window.innerHeight - 460);
+}
+
+function applyPromptHeight() {
+  const saved = parseInt(localStorage.getItem('rt_prompt_h'), 10);
+  const maxH = promptHeightCap();
+  if (saved >= 54) {
+    promptEl.style.height = Math.min(saved, maxH) + 'px';
+    return;
+  }
+  promptEl.style.height = Math.min(promptEl.scrollHeight, 180, maxH) + 'px';
+}
+
 function autoGrow() {
   // 分隔条锁死（2026-09-07 用户反馈）：拖动过 h-divider 后高度锁定为固定值，
   // 不再随内容自动增减（内容多行时 textarea 内部滚动）；未拖过才自适应
-  const saved = parseInt(localStorage.getItem('rt_prompt_h'), 10);
-  if (saved >= 54) {
-    promptEl.style.height = saved + 'px';
-    return;
-  }
-  promptEl.style.height = 'auto';
-  promptEl.style.height = Math.min(promptEl.scrollHeight, 180) + 'px';
+  applyPromptHeight();
 }
+window.addEventListener('resize', applyPromptHeight);
 promptEl.addEventListener('input', autoGrow);
 
 function getAutoSummary() {
@@ -1048,7 +1059,8 @@ hDivider.addEventListener('mousedown', (e) => {
 document.addEventListener('mousemove', (e) => {
   if (!hDividerDragging) return;
   if (e.buttons === 0) endHDividerDrag(); // mouseup 被吞时防卡死
-  const h = Math.max(54, Math.min(180, promptStartH + (e.clientY - hDragStartY)));
+  const cap = Math.min(180, promptHeightCap());
+  const h = Math.max(54, Math.min(cap, promptStartH + (e.clientY - hDragStartY)));
   promptEl.style.height = `${h}px`;
   hDividerMoved = true;
 });
