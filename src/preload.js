@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('roundtable', {
   setThrottling: (webContentsId, allowed) =>
     ipcRenderer.invoke('set-throttling', webContentsId, allowed),
 
+  // ===== 版本号（设置弹窗显示，确认安装的构建）=====
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
   // ===== 输入框附件（随问题分发给各家）=====
   chooseAttachment: () => ipcRenderer.invoke('choose-attachment'),
   attachFile: (webContentsId, filePath, fileName, profile) =>

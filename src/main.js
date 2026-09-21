@@ -610,6 +610,8 @@ ipcMain.handle('set-throttling', (_event, webContentsId, allowed) => {
 
 // ===== 输入框附件（随问题分发给各家）=====
 // 选文件：系统对话框，返回磁盘路径（CDP setFileInputFiles 需要真实路径）
+ipcMain.handle('get-app-version', () => app.getVersion());
+
 ipcMain.handle('choose-attachment', async () => {
   if (!mainWindow) return { canceled: true };
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {

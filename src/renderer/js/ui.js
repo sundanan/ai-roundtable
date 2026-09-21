@@ -142,6 +142,11 @@ function getSettings() {
   };
 }
 
+// 设置弹窗里显示当前版本（用于确认安装的构建，避免旧包误测）
+try {
+  document.getElementById('cfg-version').textContent = '当前版本 v' + roundtable.getAppVersion();
+} catch {}
+
 // ================= 分辨率自适应缩放（V5：保持当前视觉效果） =================
 // 首次运行记录窗口宽度为设计基准；之后按 当前宽度/基准 计算缩放系数，用 CSS zoom
 // 整体等比缩放（字体/间距/布局同步放大缩小），换分辨率后视觉比例与基准一致。
