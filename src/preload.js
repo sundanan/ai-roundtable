@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('roundtable', {
   callLLM: (opts) => ipcRenderer.invoke('call-llm', opts),
@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld('roundtable', {
   saveHistory: (entry) => ipcRenderer.send('save-history', entry),
   getHistory: (q, limit) => ipcRenderer.invoke('get-history', q, limit),
   deleteHistory: (id) => ipcRenderer.invoke('delete-history', id),
+
+  // ===== 分辨率自适应缩放（webFrame 级，等同浏览器 Ctrl+缩放）=====
+  setUiZoom: (factor) => {
+    try { webFrame.setZoomFactor(Math.max(0.7, Math.min(3, factor))); } catch {}
+  },
+  // 主进程按屏幕工作区算好的缩放系数（webFrame 缩放不影响 DIP，无反馈循环）
+  onUiScale: (fn) => ipcRenderer.on('ui:scale', (_e, f) => fn(f)),
 
   // ===== 关窗行为（退出程序 / 最小化到托盘常驻）=====
   setCloseMode: (mode) => ipcRenderer.send('set-close-mode', mode),

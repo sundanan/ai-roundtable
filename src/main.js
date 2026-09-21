@@ -95,6 +95,19 @@ const askQueue = [];
 const ASK_QUEUE_MAX = 3;
 // 关窗保护（改进1）：有进行中的轮次/总结时，退出前需用户确认
 let roundActive = false;
+// ===== 分辨率自适应缩放 =====
+// 设计基准 = 开发机 2160×1440@2x 的窗口宽度 1080 DIP（用户确认该比例效果良好）。
+// 依据用主进程的 workArea DIP（不受网页缩放影响——渲染层 window.innerWidth 会随
+// webFrame 缩放变化，用它算缩放会形成反馈死循环，2026-09-21 实测）。
+const UI_DESIGN_W = 1080;
+let uiScaleTimer = null;
+function sendUiScale() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const disp = screen.getDisplayMatching(mainWindow.getBounds());
+  const scale = Math.max(0.7, Math.min(3, disp.workArea.width / UI_DESIGN_W));
+  mainWindow.webContents.send('ui:scale', scale);
+  console.log(`[ui-scale] ${disp.workArea.width}DIP / ${UI_DESIGN_W} → zoom ${scale.toFixed(3)}`);
+}
 
 // 看门狗（#1）：一轮从下发到 renderer 回报 service:result 的正常上限约 20 分钟
 // （轮次等待 900s + 网页总结 300s + 发送/抓取余量）。超过 25 分钟仍无回报，
@@ -808,6 +821,11 @@ async function createWindow() {
   // file:// 子资源会被 Chromium 磁盘缓存并沿用旧版本，启动时清掉
   await win.webContents.session.clearCache();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // 分辨率自适应：加载完成/显示参数变化/窗口移动缩放时，重算并推送缩放系数
+  win.webContents.on('did-finish-load', sendUiScale);
+  screen.on('display-metrics-changed', sendUiScale);
+  win.on('resize', () => { clearTimeout(uiScaleTimer); uiScaleTimer = setTimeout(sendUiScale, 200); });
+  win.on('move', () => { clearTimeout(uiScaleTimer); uiScaleTimer = setTimeout(sendUiScale, 200); });
 
   mainWindow = win;
   // 关窗行为：exit 模式下关窗即退出（真正结束进程，HTTP 服务随之停止）；
