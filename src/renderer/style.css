@@ -419,14 +419,14 @@ button:active {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 1px 8px;
+  padding: 0 8px;
   flex: 0 0 auto;
-  min-height: 20px;
+  min-height: 18px;
 }
 
 .row-name {
   font-weight: 600;
-  font-size: 11.5px;
+  font-size: 10.5px;
   line-height: 1.2;
   white-space: nowrap;
   cursor: pointer; /* 单击全屏打开该家网页 */
@@ -441,8 +441,8 @@ button:active {
 .row-dot.error { display: block; background: var(--err); }
 /* 品牌徽章：官方 logo（assets/logos/<id>.png）；素材缺失时回退品牌色方块+首字 */
 .row-logo {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 5px;
   display: inline-flex;
   align-items: center;
@@ -471,9 +471,9 @@ button:active {
 .row-state {
   margin-left: auto;
   flex: 0 0 auto;
-  padding: 1px 8px;
+  padding: 0 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-dim);
   background: var(--dim-soft);
   white-space: nowrap;
@@ -552,12 +552,14 @@ button:active {
 
 /* 回复预览：占满行内剩余高度、最多 3 行自适应（行高时多显、矮时少显），
    超出行高裁剪且不出滚动条；点击整行展开全文（I2） */
+/* Windows 回退微软雅黑字形比 Linux 字体高 ~15%，字号缩小但行高给足 1.4，
+   防止雅黑字形被行盒裁剪（行高 1.15 时 Windows 实测"尚未发送"显示不全） */
 .row-body {
   flex: 1 1 auto;
   min-height: 0;
   padding: 0 8px 1px;
-  font-size: 11px;
-  line-height: 1.15;
+  font-size: 10px;
+  line-height: 1.4;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
