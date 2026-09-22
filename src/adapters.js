@@ -128,6 +128,31 @@ const ADAPTERS = [
     pruneSelectors: ['svg'],
   },
   {
+    id: 'wenxin',
+    name: '文心',
+    url: 'https://wenxin.baidu.com/',
+    attach: { entry: ['[class*="ci-"] svg'], entryMinX: 600, menuText: '上传本地文件', input: 'chooser' }, // 附件：回形针→菜单，chooser backendNodeId 直塞
+    // staleMax 放宽：文心回复明显偏慢，连续两轮被默认 8 轮（约 24s）陈旧检测
+    // 误判"未取到本轮回复"，实际稍后即交卷（2026-08 实测）
+    staleMax: 20,
+    inputSelectors: [
+      'textarea[class*="input"]',
+      'textarea',
+      '[contenteditable="true"]',
+    ],
+    sendSelectors: [
+      'button[class*="send"]',
+      '[class*="send" i]',
+      '[class*="submit" i]',
+    ],
+    responseSelectors: [
+      '[class*="markdown"]',
+      '[class*="answer" i]',
+      '[class*="result" i]',
+      '[class*="message-content"]',
+    ],
+  },
+  {
     id: 'kimi',
     name: 'Kimi',
     url: 'https://www.kimi.com/',
@@ -220,31 +245,6 @@ const ADAPTERS = [
     ],
   },
   {
-    id: 'wenxin',
-    name: '文心',
-    url: 'https://wenxin.baidu.com/',
-    attach: { entry: ['[class*="ci-"] svg'], entryMinX: 600, menuText: '上传本地文件', input: 'chooser' }, // 附件：回形针→菜单，chooser backendNodeId 直塞
-    // staleMax 放宽：文心回复明显偏慢，连续两轮被默认 8 轮（约 24s）陈旧检测
-    // 误判"未取到本轮回复"，实际稍后即交卷（2026-08 实测）
-    staleMax: 20,
-    inputSelectors: [
-      'textarea[class*="input"]',
-      'textarea',
-      '[contenteditable="true"]',
-    ],
-    sendSelectors: [
-      'button[class*="send"]',
-      '[class*="send" i]',
-      '[class*="submit" i]',
-    ],
-    responseSelectors: [
-      '[class*="markdown"]',
-      '[class*="answer" i]',
-      '[class*="result" i]',
-      '[class*="message-content"]',
-    ],
-  },
-  {
     id: 'mimo',
     name: 'MiMo',
     url: 'https://aistudio.xiaomimimo.com/#/c',
@@ -280,7 +280,7 @@ const ADAPTERS = [
   },
   {
     id: 'stepfun',
-    name: '阶跃',
+    name: 'StepFun',
     // 阶跃星辰 AI Studio（第 10 家，2026-09-20 新增；登录后 2026-09-22 CDP 校准：
     // 回复块类名为 Tailwind 无 markdown 字样——div.text-foreground.leading-relaxed；
     // 输入框 textarea、发送键 [aria-label*=发送] 实测命中。用户已登录）

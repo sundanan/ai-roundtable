@@ -1,6 +1,6 @@
 ---
 name: ai-roundtable
-description: "AI圆桌/一问九答：把问题同时发给9家AI（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心/MiMo/阶跃）并汇总成五段结构总结。消息含「AI圆桌」「一问九答」「问问各家AI」「多家AI对比」等触发词且带有明确问题时使用。"
+description: "AI圆桌/一问九答：把问题同时发给9家AI（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心/MiMo/StepFun）并汇总成五段结构总结。消息含「AI圆桌」「一问九答」「问问各家AI」「多家AI对比」等触发词且带有明确问题时使用。"
 ---
 
 # AI 圆桌（一问九答）
