@@ -1115,9 +1115,12 @@ button:active {
   margin-bottom: 8px;
 }
 .cfg-mini-actions { display: flex; gap: 6px; }
+/* 勾选区：左列全中文、右列全英文（DOM 顺序即中文在前，列流填充自动分组） */
 .cfg-models {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(5, auto);
+  grid-auto-flow: column;
   gap: 2px 16px;
   margin-bottom: 6px;
 }
