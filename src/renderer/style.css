@@ -1179,9 +1179,12 @@ button:active {
 .wz-preview { margin: 0 0 10px; padding-left: 20px; line-height: 1.9; }
 .wz-note { margin: 10px 0 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
 /* 登录清单：两列网格（9 行 5+4），行内 品牌 logo + 名称 + 状态 + 去登录 */
+/* 登录清单：与设置勾选区同款分组——左列全中文、右列全英文（列流填充） */
 .wz-list {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: repeat(5, auto);
+  grid-auto-flow: column;
   gap: 6px 14px;
   margin: 4px 0 6px;
 }
