@@ -19,9 +19,10 @@ const panels = new Map();
 //  - doubao：文件框常驻且 accept 明确含 docx/md（总结流程未实测）；
 //  - 其余家无常驻文件框或仅图片：附件上传失败自动回退文本模式（每家截断 2000 字）。
 // 顺序即下拉展示顺序：附件直传能力强的排前面。
+// 顺序与主界面模型框一致：中文五家在前、英文五家在后（推荐度看各 option 提示）
 const SUM_MODEL_ALLOWED = [
-  'deepseek', 'doubao', 'mimo', 'kimi',
-  'zhipu', 'qwen', 'yuanbao', 'wenxin', 'minimax', 'stepfun',
+  'qwen', 'doubao', 'yuanbao', 'zhipu', 'wenxin',
+  'kimi', 'deepseek', 'minimax', 'mimo', 'stepfun',
 ];
 
 const dock = document.getElementById('dock');
