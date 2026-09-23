@@ -1,7 +1,7 @@
 {
   "name": "ai-roundtable",
-  "version": "1.4.8",
-  "description": "AI 圆桌：一个输入框，把问题同时发给 9 个 AI 网页版（千问/豆包/元宝/智谱/Kimi/DeepSeek/MiniMax/文心/MiMo），收集回复并自动汇总",
+  "version": "1.4.9",
+  "description": "AI 圆桌：一个输入框，把问题同时发给 10 个 AI 网页版（千问/豆包/元宝/智谱/文心/Kimi/DeepSeek/MiniMax/MiMo/StepFun），收集回复并自动汇总",
   "main": "src/main.js",
   "scripts": {
     "start": "electron . --disable-gpu --in-process-gpu --ozone-platform=x11",
@@ -58,7 +58,7 @@
         "entry": {
           "Name": "AI 圆桌",
           "Name[zh_CN]": "AI 圆桌",
-          "Comment": "一个问题同时问 9 家 AI，自动汇总五段结构总结",
+          "Comment": "一个问题同时问 10 家 AI，自动汇总五段结构总结",
           "StartupWMClass": "ai-roundtable"
         }
       },
