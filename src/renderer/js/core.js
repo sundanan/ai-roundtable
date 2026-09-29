@@ -443,6 +443,25 @@ function cleanReply(text, question) {
       return ls.join('\n').trim();
     }
   }
+  // 整条回复只是"过渡句/状态行"：返回空让轮询继续等真答案。均为实测踩坑——
+  // Kimi 搜索前先报"使用 0 个工具"（曾被判交卷）；附件 圆桌总结任务.docx 收到后
+  // 先回"理解1个DOCX文件"（千问）；开搜前先应一句"我来帮你查一下……"（Kimi，
+  // 2026-09-07 实测 12s 稳定即交卷，真答案随后生成却无人抓取）。
+  // 判定收紧：仅当"整条回复就是一句过渡话"（单句、不含数字/冒号等实质标记、≤60 字）
+  // 才过滤——真答案即使以过渡句开头，后面跟实质内容的仍会保留。
+  const normOut = out.replace(/\s+/g, '');
+  const TRANS_START = /^(好的?[，,。!！]?)?(我|让我|为您|给你)?(现在|先|马上)?(来)?(帮你|为您)?(查一下|搜索一下|查询|查找|看看|想一想|思考一下|分析一下|梳理一下|整理一下|总结一下|浏览一下|了解一下)/;
+  const normSentences = normOut.split(/[。！？；]/).filter(Boolean);
+  if (
+    /^使用\d+个工具$/.test(normOut) ||
+    /^理解\d+个\S{0,8}文件$/.test(normOut) ||
+    (normSentences.length === 1 &&
+      normOut.length <= 60 &&
+      !/[0-9：:]/.test(normOut) &&
+      TRANS_START.test(normOut))
+  ) {
+    return '';
+  }
   return out;
 }
 

@@ -172,3 +172,19 @@ test('超时文案归 timeout，其余归 sendfail', async () => {
   assert.strictEqual(await detectErrorCategory(STUB, '抓取超时'), 'timeout');
   assert.strictEqual(await detectErrorCategory(STUB, '注入失败'), 'sendfail');
 });
+
+// ---------- cleanReply：过渡句/状态行过滤（2026-09 实测坑） ----------
+test('整条回复是过渡句/状态行 → 过滤（继续轮询等真答案）', () => {
+  assert.strictEqual(cleanReply('我来帮你查一下武汉目前月租最低的流量卡情况。', ''), '');
+  assert.strictEqual(cleanReply('好的，我来帮你查一下相关资费信息', ''), '');
+  assert.strictEqual(cleanReply('使用 0 个工具', ''), '');
+  assert.strictEqual(cleanReply('理解1个DOCX文件', ''), '');
+});
+
+test('过渡句后跟实质内容 → 保留（真答案不误杀）', () => {
+  assert.notStrictEqual(
+    cleanReply('我来帮你查一下武汉的流量卡行情。结论：电信 19 元档最划算，含 280G。', ''),
+    ''
+  );
+  assert.notStrictEqual(cleanReply('我来帮你查一下今天天气：晴', ''), '');
+});
