@@ -126,7 +126,7 @@ function renderAttachChips() {
 document.getElementById('attach-btn').addEventListener('click', async () => {
   const r = await roundtable.chooseAttachment().catch(() => null);
   if (!r || r.canceled || !r.path) return;
-  currentAttachment = { path: r.path, name: r.name };
+  currentAttachment = { path: r.path, name: r.name, size: r.size || 0 };
   renderAttachChips();
   promptEl.focus();
 });

@@ -131,7 +131,7 @@ const ADAPTERS = [
     id: 'wenxin',
     name: '文心',
     url: 'https://wenxin.baidu.com/',
-    attach: { entry: ['[class*="ci-"] svg'], entryMinX: 600, menuText: '上传本地文件', input: 'chooser' }, // 附件：回形针→菜单，chooser backendNodeId 直塞
+    attach: { entry: ['[class*="ci-"] svg'], entryMinX: 600, menuText: '上传文件或图片', input: 'chooser' }, // 附件：回形针→菜单（2026-09-22 文案变更），chooser backendNodeId 直塞
     // staleMax 放宽：文心回复明显偏慢，连续两轮被默认 8 轮（约 24s）陈旧检测
     // 误判"未取到本轮回复"，实际稍后即交卷（2026-08 实测）
     staleMax: 20,
@@ -166,6 +166,7 @@ const ADAPTERS = [
     reloadOnSendFail: true,
     // 思考/工具调用块不是答案：抓取时整体排除（2026-08 曾把思考前奏当回复）
     pruneSelectors: ['.thinking-container', '[class*="toolcall-container"]'],
+    maxAttachMB: 10, // 平台硬限制：单文件不可超 10MB（2026-10-17 实测拒收 14.9MB PDF）
     inputSelectors: [
       '[data-lexical-editor="true"]',
       '.chat-input-editor [contenteditable="true"]',

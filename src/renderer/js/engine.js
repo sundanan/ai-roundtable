@@ -95,7 +95,11 @@ async function runSendTask(p, text) {
   // 附件（随问题分发）：按各家 attach 配置上传，chip 校验失败自动降级纯文本
   p.attachNote = '';
   const att = typeof getActiveAttachment === 'function' ? getActiveAttachment() : null;
-  if (att && attachThisRound && p.adapter.attach) {
+  if (att && attachThisRound && p.adapter.attach &&
+      p.adapter.maxAttachMB && Math.ceil((att.size || 0) / 1048576) > p.adapter.maxAttachMB) {
+    // 单文件超平台上限：直接纯文本（如 Kimi 10MB 硬限制，2026-10-17 实测）
+    setStatus(p.statusEl, `该家单文件上限 ${p.adapter.maxAttachMB}MB，纯文本发送`);
+  } else if (att && attachThisRound && p.adapter.attach) {
     setStatus(p.statusEl, '上传附件…');
     const attRes = await roundtable
       .attachFile(p.webview.getWebContentsId(), att.path, att.name, p.adapter.attach)
@@ -129,9 +133,10 @@ async function runSendTask(p, text) {
         return true; // 专属选择器全未命中（页面改版等）不阻塞，交给 sendToPanel 报错
       })()`;
       await sleep(2500); // 起步等待：附件解析上传普遍有 1~3s 禁用窗口
-      for (let w = 0; w < 12; w++) {
+      // 大附件（10MB+）站点上传完成后才启用发送键，等待放宽到 60s
+      for (let w = 0; w < 30; w++) {
         try { if (await execInPanel(p.webview, probe)) break; } catch {}
-        await sleep(1000);
+        await sleep(2000);
       }
     } else {
       setStatus(p.statusEl, '附件不可用，纯文本发送');

@@ -622,6 +622,8 @@ ipcMain.handle('choose-attachment', async () => {
   if (canceled || !filePaths.length) return { canceled: true };
   const p = filePaths[0];
   const name = path.basename(p);
+  let size = 0;
+  try { size = fs.statSync(p).size; } catch {}
   // 拒绝编辑器锁文件：WPS 的 .~xxx.docx / Office 的 ~$xxx.docx 不含正文，
   // 曾致用户选错（2026-09-06 实测 162 字节锁文件分发给了 9 家）
   if (/^\.~|^~\$/.test(name)) {
@@ -638,7 +640,7 @@ ipcMain.handle('choose-attachment', async () => {
       return { canceled: true, error: `「${name}」只有 ${stat.size} 字节，不像有效文档（正常文档至少几 KB），请确认选择的是正式文件` };
     }
   } catch {}
-  return { canceled: false, path: p, name };
+  return { canceled: false, path: p, name, size };
 });
 
 // 逐家上传附件（2026-09-06 全量探索标定的各家路径，配置见 adapters.js attach 字段）：
@@ -671,16 +673,28 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       return r.result ? r.result.value : undefined;
     };
     const sleep = (ms) => new Promise((r2) => setTimeout(r2, ms));
-    const trustedClick = (x, y) => {
-      // 注意：Electron sendInputEvent 的事件名是 mouseMove（CDP 里才叫 mouseMoved），
-      // 用错会抛 "Invalid event object"（2026-09-06 实测：曾致元宝/文心/Kimi/千问附件全挂）
-      wc.sendInputEvent({ type: 'mouseMove', x, y });
-      wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    // 可信点击走 CDP Input 域（debugger 已挂载）：wc.sendInputEvent 在千问 2026-09
+    // 改版后不再被识别（菜单/选择器均无响应），CDP 事件链才是完整可信输入
+    const trustedClick = async (x, y) => {
+      await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+      await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await sleep(120); // 按下停留 ~120ms：零停留点击会被新版菜单忽略
+      await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
     };
     // chip 校验词：文件名词干（≥4 字）优先，否则完整文件名
     const stem = String(fileName || '').replace(/\.[^.]+$/, '');
     const chipProbe = `document.body.innerText.indexOf(${JSON.stringify(stem.length >= 4 ? stem : fileName)}) !== -1`;
+
+    // 塞入文件后轮询等附件标记出现：站点还要把文件传到自己的服务器，
+    // 10MB+ 大文件普遍需要 10~60s（原固定 2.5s 一次性检查导致大文件被误判"不可用"）
+    const waitChip = async () => {
+      const deadline = Date.now() + 45000;
+      while (Date.now() < deadline) {
+        try { if (await evalJs(chipProbe)) return true; } catch {}
+        await sleep(1000);
+      }
+      return false;
+    };
 
     const pickInputAndUpload = async () => {
       const doc = await dbg.sendCommand('DOM.getDocument', { depth: -1 });
@@ -695,8 +709,8 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
       for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
       await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: res.nodeIds[pick] });
-      await sleep(2500);
-      return !!(await evalJs(chipProbe));
+      const ok = await waitChip();
+      return ok;
     };
 
     if (profile.input === 'resident') {
@@ -717,8 +731,8 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
       for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
       await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: nodes.nodeIds[pick] });
-      await sleep(2500);
-      const ok = !!(await evalJs(chipProbe));
+      console.log('[attach] 文件已塞入，等待站点上传完成…');
+      const ok = await waitChip();
       console.log(`[attach] resident 上传结果: ${ok}`);
       return { ok };
     }
@@ -727,7 +741,7 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
     const entries = Array.isArray(profile.entry) ? profile.entry : [profile.entry];
     const minX = profile.entryMinX || 0;
     for (const sel of entries) {
-      const rects = JSON.parse(await evalJs(`(function () {
+      let rects = JSON.parse(await evalJs(`(function () {
         var out = [];
         var els = document.querySelectorAll(${JSON.stringify(sel)});
         for (var i = 0; i < els.length && out.length < 4; i++) {
@@ -738,12 +752,29 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
         }
         return JSON.stringify(out);
       })()`));
+      console.log(`[attach-d] ${profile.menuText || 'no-menu'} rects=${rects.length}`);
+      // 入口元素可能未渲染完（SPA 刚加载/刚 reload）：先等它出现，最多 8s
+      for (let waitEntry = 0; waitEntry < 8 && !rects.length; waitEntry++) {
+        await sleep(1000);
+        rects = JSON.parse(await evalJs(`(function () {
+          var out = [];
+          var els = document.querySelectorAll(${JSON.stringify(sel)});
+          for (var i = 0; i < els.length && out.length < 4; i++) {
+            var r = els[i].getBoundingClientRect();
+            if (!(r.width > 2 && r.height > 2)) continue;
+            if (${minX} && (r.x + r.width / 2) < ${minX}) continue;
+            out.push({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
+          }
+          return JSON.stringify(out);
+        })()`));
+      }
       for (const rect of rects) {
         // 每个候选点两次尝试：首次点击无菜单可能是页面刚加载完 handler 未挂好
         for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) await sleep(2000);
-        trustedClick(rect.x, rect.y);
+        await trustedClick(rect.x, rect.y);
         await sleep(1300);
+        console.log(`[attach-d] clicked(${Math.round(rect.x)},${Math.round(rect.y)}) attempt=${attempt}`);
 
         if (profile.menuText) {
           // 菜单弹出有动画延迟：最多扫 3 次（间隔 0.9s），避免误判"没弹菜单"
@@ -755,7 +786,7 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
               var els = document.querySelectorAll('li, div[role="menuitem"], div, span, p, a');
               for (var i = 0; i < els.length; i++) {
                 var t = (els[i].textContent || '').trim();
-                if (t.length > 0 && t.length <= 14 && re.test(t) && !/图片|拍照|截图/.test(t)) {
+                if (t.length > 0 && t.length <= 14 && re.test(t) && !/^(上传)?图片$/.test(t) && !/拍照|截图/.test(t)) {
                   var r = els[i].getBoundingClientRect();
                   if (r.width > 0 && r.height > 0) return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) });
                 }
@@ -763,16 +794,23 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
               return null;
             })()`);
           }
-          if (!menuRect) continue; // 该候选没弹菜单 → 下一个
-          const m = JSON.parse(menuRect);
-          trustedClick(m.x, m.y);
-          await sleep(1500);
+          if (menuRect) {
+            const m = JSON.parse(menuRect);
+            console.log(`[attach-d] menu 点击: ${JSON.stringify(m)}`);
+            await trustedClick(m.x, m.y);
+            await sleep(1500);
+          } else {
+            // 菜单未出现：不再跳过——继续走文件框/chooser 尝试
+            //（部分站点按钮直接触发文件选择器，2026-09 千问实测菜单消失）
+            console.log('[attach-d] menu 未出现，直试文件框/chooser');
+          }
         }
 
         // chooser 拦截可能在页面导航/时间流逝后失效（实测会弹原生文件框），点击后重设一次
         try { await dbg.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true }); } catch {}
         // 文件框：DOM 查询直塞
         if (await pickInputAndUpload()) { console.log('[attach] entry 上传结果: ok'); return { ok: true }; }
+        console.log(`[attach-d] 尝试后: inputs DOM查询+chip流程, chooser累计=${chooserEvents.length}`);
         // chooser 事件路径：backendNodeId 直塞
         if (chooserEvents.length) {
           const evp = chooserEvents[chooserEvents.length - 1];
@@ -903,10 +941,13 @@ ipcMain.handle('click-at', (event, webContentsId, x, y) => {
   const wc = webContents.fromId(webContentsId);
   if (!wc) throw new Error('webview 尚未就绪');
   wc.focus();
-  // MiMo 等站点要求 hover 后点击才生效（2026-09-07 实测），统一先发 mouseMove
+  // MiMo 等站点要求 hover 后点击才生效（2026-09-07 实测），统一先发 mouseMove；
+  // 按下停留 120ms 再释放（千问 2026-09-22 实测零停留点击被菜单忽略）
   wc.sendInputEvent({ type: 'mouseMove', x, y });
   wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-  wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+  setTimeout(() => {
+    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+  }, 120);
 });
 
 // 总结 LLM 调用放在主进程，避开渲染进程的 CORS 限制
