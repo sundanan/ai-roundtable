@@ -684,6 +684,15 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
     // chip 校验词：文件名词干（≥4 字）优先，否则完整文件名
     const stem = String(fileName || '').replace(/\.[^.]+$/, '');
     const chipProbe = `document.body.innerText.indexOf(${JSON.stringify(stem.length >= 4 ? stem : fileName)}) !== -1`;
+    // CDP setFileInputFiles 不触发 change 事件：部分站点（qwen 2026-09 新 UI 的临时
+    // 文件框等）监听 change 才处理塞入的文件，塞完必须显式补发一次
+    const CHANGE_EVENT_JS = `(function () {
+      var els = document.querySelectorAll('input[type=file]');
+      for (var i = 0; i < els.length; i++) {
+        try { els[i].dispatchEvent(new Event('input', { bubbles: true })); els[i].dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+      }
+      return 1;
+    })()`;
 
     // 塞入文件后轮询等附件标记出现：站点还要把文件传到自己的服务器，
     // 10MB+ 大文件普遍需要 10~60s（原固定 2.5s 一次性检查导致大文件被误判"不可用"）
@@ -709,6 +718,7 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
       for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
       await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: res.nodeIds[pick] });
+      await evalJs(CHANGE_EVENT_JS).catch(() => {});
       const ok = await waitChip();
       return ok;
     };
@@ -731,6 +741,7 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
       for (let i = 0; i < accepts.length; i++) if (/doc|md|text/i.test(accepts[i] || '')) { pick = i; break; }
       for (let i = 0; i < accepts.length; i++) if (!(accepts[i] || '')) { pick = i; break; }
       await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], nodeId: nodes.nodeIds[pick] });
+      await evalJs(CHANGE_EVENT_JS).catch(() => {});
       console.log('[attach] 文件已塞入，等待站点上传完成…');
       const ok = await waitChip();
       console.log(`[attach] resident 上传结果: ${ok}`);
@@ -816,8 +827,23 @@ ipcMain.handle('attach-file', async (_event, webContentsId, filePath, fileName, 
           const evp = chooserEvents[chooserEvents.length - 1];
           if (evp.backendNodeId) {
             await dbg.sendCommand('DOM.setFileInputFiles', { files: [filePath], backendNodeId: evp.backendNodeId });
-            await sleep(2500);
-            if (await evalJs(chipProbe)) { console.log('[attach] entry(chooser) 上传结果: ok'); return { ok: true }; }
+            await evalJs(CHANGE_EVENT_JS).catch(() => {});
+            console.log('[attach] chooser 直塞完成，等待站点确认…');
+            // 站点上传确认有延迟（大文件更久）：轮询最长 45s。chip（文件名上屏）或
+            // input.files（原生文件列表已挂上）任一出现即成功——部分站点 UI 不显示
+            // 文件名只显示附件图标，此前只查 chip 会把已成功的上传误判为失败
+            // （2026-09-22 qwen 实测：文件已挂输入框却报"入口未响应"）
+            const deadline2 = Date.now() + 45000;
+            while (Date.now() < deadline2) {
+              const ok = await evalJs(`(function () {
+                if (document.body.innerText.indexOf(${JSON.stringify(stem.length >= 4 ? stem : fileName)}) !== -1) return true;
+                var els = document.querySelectorAll('input[type=file]');
+                for (var i = 0; i < els.length; i++) { try { if (els[i].files && els[i].files.length) return true; } catch (e) {} }
+                return false;
+              })()`).catch(() => false);
+              if (ok) { console.log('[attach] entry(chooser) 上传结果: ok'); return { ok: true }; }
+              await sleep(1000);
+            }
           }
         }
         } // attempt 循环
@@ -941,13 +967,13 @@ ipcMain.handle('click-at', (event, webContentsId, x, y) => {
   const wc = webContents.fromId(webContentsId);
   if (!wc) throw new Error('webview 尚未就绪');
   wc.focus();
-  // MiMo 等站点要求 hover 后点击才生效（2026-09-07 实测），统一先发 mouseMove；
-  // 按下停留 120ms 再释放（千问 2026-09-22 实测零停留点击被菜单忽略）
+  // MiMo 等站点要求 hover 后点击才生效（2026-09-07 实测），统一先发 mouseMove。
+  // 注意保持 down/up 同步连发：曾试过延迟 120ms 释放，与 focus() 时序交织后
+  // 发送键点击反而不生效（2026-09-22 三阶段实测阶段2从未成功）；按压停留只对
+  // CDP Input 域的菜单点击必要（attach 流程），此处不需要
   wc.sendInputEvent({ type: 'mouseMove', x, y });
   wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-  setTimeout(() => {
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
-  }, 120);
+  wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
 });
 
 // 总结 LLM 调用放在主进程，避开渲染进程的 CORS 限制

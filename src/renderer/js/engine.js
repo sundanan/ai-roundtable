@@ -164,6 +164,18 @@ async function runSendTask(p, text) {
         res = await sendToPanel(p.adapter, p.webview, text);
       }
     }
+    // 附件兜底（2026-09-22 实测）：附件未真正就绪时部分站点（deepseek/minimax/mimo）
+    // 内部禁用发送键（DOM 属性看不出、cursor:not-allowed），点击/回车全被静默吞掉，
+    // 表现为"文字和附件都在、就是发不出去"。此时放弃附件、重载页面纯文本重发，
+    // 保证本轮有答案、无需用户手动点击。
+    if ((!res || !res.ok) && p.attachNote === '📎') {
+      setStatus(p.statusEl, '附件阻塞发送，改纯文本重发…');
+      p.attachNote = '';
+      try { p.webview.loadURL(p.adapter.url).catch(() => {}); } catch {}
+      await waitWebviewReady(p.webview);
+      await sleep(4000);
+      res = await sendToPanel(p.adapter, p.webview, text);
+    }
     if (res && res.ok) {
       p.pageDirty = true;
       if (p.state === 'sending') {

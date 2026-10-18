@@ -69,6 +69,13 @@ function buildPrepareScript(adapter) {
     var sel = window.getSelection();
     var range = document.createRange();
     range.selectNodeContents(input);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    // 先清空编辑器：自动化发送的是完整问题文本，insertText 是追加语义，
+    // 发送失败重试时会再插一遍导致"重复录入"（2026-09-22 千问实测）
+    try { document.execCommand('delete'); } catch (e) {}
+    range = document.createRange();
+    range.selectNodeContents(input);
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
@@ -562,6 +569,23 @@ async function sendToPanel(adapter, webview, text) {
   await sleep(1500);
   const v = await verify();
   if (v && v.sent) return { ok: true, via: 'enter' };
+
+  // 4) 附件可能仍在上传：站点在此期间静默吞掉发送。等 5 秒再补一轮点击
+  //    （2026-09-22 deepseek/minimax/mimo 实测：附件就绪后同一按钮即可发出）
+  await sleep(5000);
+  const click2 = await execInPanel(webview, buildClickSendScript(adapter)).catch(() => null);
+  if (click2 && click2.ok) {
+    await sleep(2000);
+    const v2 = await verify();
+    if (v2 && v2.sent) return { ok: true, via: 'button-retry' };
+  }
+  const rect2 = await execInPanel(webview, buildSendRectScript(adapter)).catch(() => null);
+  if (rect2 && rect2.ok) {
+    await roundtable.clickAt(wcId, rect2.x, rect2.y);
+    await sleep(2000);
+    const v2 = await verify();
+    if (v2 && v2.sent) return { ok: true, via: 'trusted-click-retry' };
+  }
   // 能读到输入框且内容仍在 → 确实没发出去，如实报失败（此前返回 ok:unverified，
   // 把"填了没提交"当成功，只能等陈旧检测超时兜底——Kimi 超时假象的来源之一）
   if (v) return { ok: false, error: '发送未生效（内容仍在输入框）' };
