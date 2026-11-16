@@ -3,7 +3,8 @@
  * 选择器每日自检（只读探测，不发消息、不点击、不消耗各家额度）。
  *
  * 目的：网站改版导致选择器失效时当天告警，而不是等用户提问失败才发现。
- * 原理：连 127.0.0.1:9222 的 CDP，在每个 webview 里评估一段只读脚本——
+ * 原理：连 127.0.0.1:9223 的 CDP（9222 被本机 360 浏览器 headless 占用），
+ * 在每个 webview 里评估一段只读脚本——
  *   ①输入框能否命中（专属选择器 / 仅通用兜底 / 完全没有）
  *   ②发送键能否命中（同上；部分站发送键懒加载，缺失只记 info）
  *   ③页面是否停在登录/验证（URL/标题特征）
@@ -20,7 +21,7 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 const { ADAPTERS } = require('../src/adapters');
 
-const CDP_PORT = 9222;
+const CDP_PORT = 9223;
 const APP_PORT = 8765;
 const LOG = path.join(os.homedir(), 'ai-roundtable-selector-check.log');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
